@@ -1,176 +1,279 @@
+# -*- coding: utf-8 -*-
 """
-日历热力图组件
-==============
-类似GitHub贡献图的日历热力图，用于展示每日日记字数。
-使用不同深度的绿色表示不同的字数范围。
-"""
+GeziDiary - 鸽子日记
+热力图日历模块
 
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-    QGridLayout, QFrame, QToolTip, QScrollArea
-)
-from PyQt6.QtCore import Qt, pyqtSignal, QDate
-from PyQt6.QtGui import QColor, QPainter, QBrush, QFont, QMouseEvent
+功能：展示类似GitHub贡献图的日历热力图，显示每日文本量
+"""
 
 from datetime import date, timedelta
-from calendar import monthrange
-from typing import Dict, Optional, Callable
+from typing import Dict, Optional
+
+# ============================================
+# PyQt6 导入
+# ============================================
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QLabel, QToolTip, QFrame
+)
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtGui import QColor, QPainter, QFont, QMouseEvent
 
 
 class HeatmapCell(QFrame):
     """
-    热力图单元格
+    热力图单元格类
     
-    表示某一天的数据，根据数值显示不同颜色深度。
+    表示单日的热力图单元格，根据文本量显示不同颜色深度
+    
+    Attributes:
+        cell_date (date): 单元格代表的日期
+        value (int): 该日期的文本量（字符数）
+        is_selected (bool): 是否被选中
+        is_today (bool): 是否是今天
+    
+    Signals:
+        clicked: 点击时发射，传递日期
     """
     
-    # 颜色等级定义（从浅到深）
-    COLORS = [
-        "#ebedf0",  # 等级0: 无数据（浅灰）
-        "#9be9a8",  # 等级1: 少量（浅绿）
-        "#40c463",  # 等级2: 中等（中绿）
-        "#30a14e",  # 等级3: 较多（深绿）
-        "#216e39",  # 等级4: 大量（最深绿）
-    ]
+    # 自定义信号：点击时发射
+    clicked = pyqtSignal(date)
     
-    # 字数阈值定义
-    THRESHOLDS = [0, 100, 300, 600, 1000]
+    # ============================================
+    # 颜色配置（GitHub风格）
+    # ============================================
+    # 亮色主题颜色
+    LIGHT_COLORS = {
+        0: '#ebedf0',      # 无数据 - 浅灰
+        1: '#9be9a8',      # 少量 - 浅绿
+        2: '#40c463',      # 中等 - 中绿
+        3: '#30a14e',      # 较多 - 深绿
+        4: '#216e39',      # 大量 - 最深绿
+    }
     
-    clicked = pyqtSignal(date)  # 点击信号
+    # 暗色主题颜色
+    DARK_COLORS = {
+        0: '#161b22',      # 无数据 - 深灰
+        1: '#0e4429',      # 少量 - 暗绿
+        2: '#006d32',      # 中等 - 中绿
+        3: '#26a641',      # 较多 - 亮绿
+        4: '#39d353',      # 大量 - 最亮绿
+    }
     
-    def __init__(self, cell_date: date, word_count: int = 0, parent=None):
+    # 选中状态边框颜色
+    SELECTED_BORDER = '#0969da'
+    TODAY_BORDER = '#f0883e'
+    
+    def __init__(self, cell_date: date, parent=None):
         """
-        初始化单元格
+        初始化热力图单元格
         
         Args:
             cell_date: 单元格代表的日期
-            word_count: 字数统计
-            parent: 父组件
+            parent: 父部件
         """
         super().__init__(parent)
         
+        # ============================================
+        # 初始化属性
+        # ============================================
         self.cell_date = cell_date
-        self.word_count = word_count
-        self.level = self._calculate_level()
+        self.value = 0
+        self.is_selected = False
+        self.is_today = (cell_date == date.today())
+        self.level = 0  # 热力等级 0-4
         
-        # 设置固定大小
+        # ============================================
+        # 设置UI
+        # ============================================
+        self._setup_ui()
+    
+    def _setup_ui(self):
+        """
+        设置单元格UI
+        """
+        # 固定大小
         self.setFixedSize(14, 14)
         
-        # 设置样式
-        self._update_style()
+        # 设置边框样式
+        self.setFrameStyle(QFrame.Shape.StyledPanel)
+        self.setLineWidth(1)
         
-        # 启用鼠标跟踪以显示工具提示
+        # 启用鼠标跟踪（用于显示提示）
         self.setMouseTracking(True)
-    
-    def _calculate_level(self) -> int:
-        """
-        根据字数计算颜色等级
         
-        Returns:
-            int: 颜色等级 (0-4)
-        """
-        for i, threshold in enumerate(self.THRESHOLDS):
-            if self.word_count < threshold:
-                return max(0, i - 1)
-        return 4
-    
-    def _update_style(self):
-        """
-        更新单元格样式
-        """
-        color = self.COLORS[self.level]
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {color};
+        # 设置圆角
+        self.setStyleSheet("""
+            HeatmapCell {
                 border-radius: 2px;
-                border: 1px solid rgba(27, 31, 35, 0.06);
+                border: 1px solid transparent;
+            }
+        """)
+        
+        # 更新颜色
+        self._update_color()
+    
+    def set_value(self, value: int):
+        """
+        设置单元格的值（字符数）
+        
+        Args:
+            value: 字符数
+        """
+        self.value = value
+        
+        # 计算热力等级
+        if value == 0:
+            self.level = 0
+        elif value < 100:
+            self.level = 1
+        elif value < 500:
+            self.level = 2
+        elif value < 1000:
+            self.level = 3
+        else:
+            self.level = 4
+        
+        # 更新颜色
+        self._update_color()
+    
+    def set_selected(self, selected: bool):
+        """
+        设置选中状态
+        
+        Args:
+            selected: 是否选中
+        """
+        self.is_selected = selected
+        self._update_color()
+    
+    def _update_color(self):
+        """
+        更新单元格颜色
+        
+        根据热力等级和选中状态设置背景色
+        """
+        # 获取当前等级颜色（使用亮色主题）
+        color = self.LIGHT_COLORS.get(self.level, self.LIGHT_COLORS[0])
+        
+        # 确定边框颜色
+        if self.is_selected:
+            border_color = self.SELECTED_BORDER
+            border_width = 2
+        elif self.is_today:
+            border_color = self.TODAY_BORDER
+            border_width = 2
+        else:
+            border_color = 'rgba(27, 31, 35, 0.06)'
+            border_width = 1
+        
+        # 应用样式
+        self.setStyleSheet(f"""
+            HeatmapCell {{
+                background-color: {color};
+                border: {border_width}px solid {border_color};
+                border-radius: 2px;
             }}
-            QFrame:hover {{
-                border: 1px solid rgba(27, 31, 35, 0.3);
+            HeatmapCell:hover {{
+                border: 2px solid {self.SELECTED_BORDER};
             }}
         """)
     
-    def set_word_count(self, count: int):
+    def enterEvent(self, event):
         """
-        设置字数并更新显示
+        鼠标进入事件
         
-        Args:
-            count: 新的字数
+        显示工具提示
         """
-        self.word_count = count
-        new_level = self._calculate_level()
-        if new_level != self.level:
-            self.level = new_level
-            self._update_style()
+        # 格式化日期
+        date_str = self.cell_date.strftime('%Y年%m月%d日')
+        weekday = ['一', '二', '三', '四', '五', '六', '日'][self.cell_date.weekday()]
+        
+        # 格式化文本量
+        if self.value == 0:
+            value_str = '无日记'
+        else:
+            value_str = f'{self.value} 字符'
+        
+        # 设置工具提示
+        tooltip = f"{date_str} 星期{weekday}\n{value_str}"
+        self.setToolTip(tooltip)
+        
+        super().enterEvent(event)
     
     def mousePressEvent(self, event: QMouseEvent):
         """
         鼠标点击事件
+        
+        发射clicked信号
         """
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit(self.cell_date)
-    
-    def enterEvent(self, event):
-        """
-        鼠标进入事件 - 显示工具提示
-        """
-        date_str = self.cell_date.strftime("%Y年%m月%d日")
-        tooltip = f"{date_str}\n字数: {self.word_count}"
-        self.setToolTip(tooltip)
+        
+        super().mousePressEvent(event)
 
 
 class HeatmapCalendar(QWidget):
     """
-    日历热力图组件
+    热力图日历部件类
     
-    显示一整年的日历热力图，类似GitHub的贡献图。
-    支持点击日期跳转、月份标签显示等功能。
+    展示全年或指定时间范围的GitHub风格热力图
+    
+    Attributes:
+        year (int): 当前显示的年份
+        data (Dict[date, int]): 日期到字符数的映射
+        selected_date (date): 当前选中的日期
+        cells (Dict[date, HeatmapCell]): 日期到单元格的映射
     
     Signals:
-        date_selected: 当用户点击某个日期时发射
+        date_selected: 选择日期时发射
     """
     
-    date_selected = pyqtSignal(date)  # 日期选择信号
+    # 自定义信号：选择日期时发射
+    date_selected = pyqtSignal(date)
     
     def __init__(self, parent=None):
         """
-        初始化日历热力图
+        初始化热力图日历
         
         Args:
-            parent: 父组件
+            parent: 父部件
         """
         super().__init__(parent)
         
-        # 当前显示的年份
-        self.current_year = date.today().year
-        
-        # 存储所有单元格的字典 {date: HeatmapCell}
+        # ============================================
+        # 初始化属性
+        # ============================================
+        self.year = date.today().year
+        self.data: Dict[date, int] = {}
+        self.selected_date: Optional[date] = None
         self.cells: Dict[date, HeatmapCell] = {}
         
-        # 数据获取回调函数
-        self.data_callback: Optional[Callable[[int], Dict[date, int]]] = None
+        # ============================================
+        # 设置UI
+        # ============================================
+        self._setup_ui()
         
-        # 初始化UI
-        self._init_ui()
-        
-        # 加载当前年份的数据
-        self.load_year(self.current_year)
+        # 初始化为当前年份
+        self.set_year(self.year)
     
-    def _init_ui(self):
+    def _setup_ui(self):
         """
-        初始化用户界面
+        设置UI布局
         """
-        # 创建主布局
+        # 主布局
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
         
-        # 创建标题栏
+        # ============================================
+        # 标题区域
+        # ============================================
         header_layout = QHBoxLayout()
         
         # 年份标签
-        self.year_label = QLabel(str(self.current_year))
-        self.year_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #24292e;")
+        self.year_label = QLabel(str(self.year))
+        self.year_label.setFont(QFont("Microsoft YaHei", 14, QFont.Weight.Bold))
         header_layout.addWidget(self.year_label)
         
         header_layout.addStretch()
@@ -179,234 +282,251 @@ class HeatmapCalendar(QWidget):
         legend_layout = QHBoxLayout()
         legend_layout.setSpacing(4)
         
-        legend_label = QLabel("少")
-        legend_label.setStyleSheet("color: #586069; font-size: 11px;")
+        legend_label = QLabel('少')
+        legend_label.setFont(QFont("Microsoft YaHei", 9))
         legend_layout.addWidget(legend_label)
         
-        # 添加颜色等级示例
-        for i, color in enumerate(HeatmapCell.COLORS):
+        # 图例颜色块
+        for level in range(5):
             legend_cell = QFrame()
             legend_cell.setFixedSize(12, 12)
+            color = HeatmapCell.LIGHT_COLORS[level]
             legend_cell.setStyleSheet(f"""
-                background-color: {color};
-                border-radius: 2px;
-                border: 1px solid rgba(27, 31, 35, 0.06);
+                QFrame {{
+                    background-color: {color};
+                    border: 1px solid rgba(27, 31, 35, 0.06);
+                    border-radius: 2px;
+                }}
             """)
             legend_layout.addWidget(legend_cell)
         
-        legend_label2 = QLabel("多")
-        legend_label2.setStyleSheet("color: #586069; font-size: 11px;")
+        legend_label2 = QLabel('多')
+        legend_label2.setFont(QFont("Microsoft YaHei", 9))
         legend_layout.addWidget(legend_label2)
         
         header_layout.addLayout(legend_layout)
+        
         layout.addLayout(header_layout)
         
-        # 创建热力图网格容器
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        # ============================================
+        # 热力图网格
+        # ============================================
+        # 创建滚动区域容器
+        self.heatmap_container = QWidget()
+        self.heatmap_layout = QHBoxLayout(self.heatmap_container)
+        self.heatmap_layout.setContentsMargins(0, 0, 0, 0)
+        self.heatmap_layout.setSpacing(8)
         
-        self.grid_widget = QWidget()
-        self.grid_layout = QHBoxLayout(self.grid_widget)
-        self.grid_layout.setSpacing(4)
-        self.grid_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.heatmap_container)
         
-        scroll_area.setWidget(self.grid_widget)
-        layout.addWidget(scroll_area)
-        
-        # 初始化网格
-        self._create_grid()
+        # 初始化热力图网格
+        self._create_heatmap_grid()
     
-    def _create_grid(self):
+    def _create_heatmap_grid(self):
         """
         创建热力图网格
         
-        按照GitHub风格，每列代表一周，每行代表星期几。
+        按照GitHub贡献图的布局：
+        - 每列代表一周（7天）
+        - 每行代表星期几
+        - 从左到右显示全年
         """
-        # 清空现有单元格
-        self.cells.clear()
-        
-        # 清除布局中的所有widget
-        while self.grid_layout.count():
-            item = self.grid_layout.takeAt(0)
+        # 清除旧的内容
+        # 先保存布局中的所有部件，然后删除
+        while self.heatmap_layout.count():
+            item = self.heatmap_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
         
-        # 创建月份标签行
-        months_widget = QWidget()
-        months_layout = QVBoxLayout(months_widget)
-        months_layout.setSpacing(0)
-        months_layout.setContentsMargins(0, 0, 0, 0)
+        self.cells.clear()
         
-        # 空白占位（对应星期标签的位置）
-        spacer = QLabel()
-        spacer.setFixedSize(30, 20)
-        months_layout.addWidget(spacer)
+        # ============================================
+        # 创建星期标签列
+        # ============================================
+        weekday_widget = QWidget()
+        weekday_layout = QVBoxLayout(weekday_widget)
+        weekday_layout.setContentsMargins(0, 20, 4, 0)
+        weekday_layout.setSpacing(2)
         
-        # 月份标签容器
-        months_row = QWidget()
-        months_row_layout = QHBoxLayout(months_row)
-        months_row_layout.setSpacing(0)
-        months_row_layout.setContentsMargins(0, 0, 0, 0)
+        # 星期标签（只显示部分）
+        weekdays = ['', '周一', '', '周三', '', '周五', '']
+        for day in weekdays:
+            label = QLabel(day)
+            label.setFont(QFont("Microsoft YaHei", 8))
+            label.setFixedSize(28, 14)
+            weekday_layout.addWidget(label)
         
-        # 计算每个月的起始位置
-        year_start = date(self.current_year, 1, 1)
-        # 找到第一个周日（或该年的第一天）
+        self.heatmap_layout.addWidget(weekday_widget)
+        
+        # ============================================
+        # 计算日期范围
+        # ============================================
+        # 从该年第一天开始
+        year_start = date(self.year, 1, 1)
+        # 到该年最后一天
+        year_end = date(self.year, 12, 31)
+        
+        # 调整到第一个星期日（或周一，根据喜好）
+        # GitHub风格：从周日开始
         first_day = year_start - timedelta(days=year_start.weekday() + 1)
-        if first_day.year < self.current_year:
+        if first_day.year < self.year:
             first_day = year_start
         
-        # 添加月份标签
+        # ============================================
+        # 创建月份标签和热力图
+        # ============================================
+        current_date = first_day
         current_month = 0
-        month_names = ["1月", "2月", "3月", "4月", "5月", "6月",
-                      "7月", "8月", "9月", "10月", "11月", "12月"]
         
-        # 这里简化处理，在网格上方显示月份
-        months_layout.addWidget(months_row)
-        self.grid_layout.addWidget(months_widget)
-        
-        # 创建主网格
-        grid_container = QWidget()
-        grid_container_layout = QHBoxLayout(grid_container)
-        grid_container_layout.setSpacing(4)
-        grid_container_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # 星期标签
-        weekdays_widget = QWidget()
-        weekdays_layout = QVBoxLayout(weekdays_widget)
-        weekdays_layout.setSpacing(4)
-        weekdays_layout.setContentsMargins(0, 0, 5, 0)
-        
-        weekday_labels = ["", "一", "", "三", "", "五", ""]
-        for label_text in weekday_labels:
-            label = QLabel(label_text)
-            label.setFixedSize(20, 14)
-            label.setStyleSheet("color: #586069; font-size: 10px;")
-            label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            weekdays_layout.addWidget(label)
-        
-        grid_container_layout.addWidget(weekdays_widget)
-        
-        # 创建日期网格
-        self.cells_grid = QGridLayout()
-        self.cells_grid.setSpacing(3)
-        self.cells_grid.setContentsMargins(0, 0, 0, 0)
-        
-        # 计算该年的所有日期
-        start_date = date(self.current_year, 1, 1)
-        end_date = date(self.current_year, 12, 31)
-        
-        # 从该年第一个周日开始（或该年第一天）
-        current_date = start_date - timedelta(days=start_date.weekday() + 1)
-        if current_date.year < self.current_year:
-            current_date = start_date
-        
-        col = 0
-        while current_date <= end_date:
-            for row in range(7):  # 0=周一, 6=周日
-                if current_date.year == self.current_year:
-                    # 创建单元格
-                    cell = HeatmapCell(current_date, 0)
-                    cell.clicked.connect(self._on_cell_clicked)
-                    self.cells[current_date] = cell
-                    self.cells_grid.addWidget(cell, row, col)
-                
-                current_date += timedelta(days=1)
-                if current_date > end_date:
-                    break
+        # 按月分组创建
+        while current_date <= year_end:
+            # 创建月份容器
+            month_widget = QWidget()
+            month_layout = QVBoxLayout(month_widget)
+            month_layout.setContentsMargins(0, 0, 0, 0)
+            month_layout.setSpacing(4)
             
-            col += 1
-            if current_date > end_date:
-                break
+            # 月份标签
+            if current_date.month != current_month:
+                month_label = QLabel(f"{current_date.month}月")
+                month_label.setFont(QFont("Microsoft YaHei", 9))
+                month_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+                month_layout.addWidget(month_label)
+                current_month = current_date.month
+            else:
+                month_layout.addWidget(QLabel())  # 占位
+            
+            # 创建该月的周网格
+            month_grid = QGridLayout()
+            month_grid.setContentsMargins(0, 0, 0, 0)
+            month_grid.setSpacing(2)
+            
+            col = 0
+            while current_date <= year_end and current_date.month == current_month:
+                # 创建7天的列
+                for row in range(7):
+                    if current_date > year_end:
+                        break
+                    
+                    # 创建单元格
+                    cell = HeatmapCell(current_date)
+                    cell.clicked.connect(self._on_cell_clicked)
+                    
+                    # 保存到映射
+                    self.cells[current_date] = cell
+                    
+                    # 添加到网格
+                    month_grid.addWidget(cell, row, col)
+                    
+                    # 下一天
+                    current_date += timedelta(days=1)
+                
+                col += 1
+            
+            month_layout.addLayout(month_grid)
+            self.heatmap_layout.addWidget(month_widget)
         
-        grid_widget = QWidget()
-        grid_widget.setLayout(self.cells_grid)
-        grid_container_layout.addWidget(grid_widget)
-        grid_container_layout.addStretch()
+        # 添加弹性空间
+        self.heatmap_layout.addStretch()
         
-        self.grid_layout.addWidget(grid_container)
-        self.grid_layout.addStretch()
+        # 更新数据
+        self._update_cells()
+    
+    def _update_cells(self):
+        """
+        更新所有单元格的数据
+        """
+        for cell_date, cell in self.cells.items():
+            # 获取该日期的字符数
+            value = self.data.get(cell_date, 0)
+            cell.set_value(value)
+            
+            # 更新选中状态
+            cell.set_selected(cell_date == self.selected_date)
     
     def _on_cell_clicked(self, clicked_date: date):
         """
-        单元格点击处理
+        处理单元格点击
         
         Args:
-            clicked_date: 被点击的日期
+            clicked_date: 点击的日期
         """
+        # 更新选中日期
+        self.set_selected_date(clicked_date)
+        
+        # 发射信号
         self.date_selected.emit(clicked_date)
     
-    def set_data_callback(self, callback: Callable[[int], Dict[date, int]]):
+    def set_year(self, year: int):
         """
-        设置数据获取回调函数
-        
-        Args:
-            callback: 回调函数，接收年份参数，返回日期到字数的映射字典
-        """
-        self.data_callback = callback
-        # 重新加载当前年份数据
-        self.load_year(self.current_year)
-    
-    def load_year(self, year: int):
-        """
-        加载指定年份的数据
+        设置显示的年份
         
         Args:
             year: 年份
         """
-        self.current_year = year
+        self.year = year
         self.year_label.setText(str(year))
         
-        # 如果年份改变，需要重新创建网格
-        if not self.cells or list(self.cells.keys())[0].year != year:
-            self._create_grid()
-        
-        # 如果有数据回调，获取数据
-        if self.data_callback:
-            data = self.data_callback(year)
-            self.update_data(data)
+        # 重新创建网格
+        self._create_heatmap_grid()
     
-    def update_data(self, data: Dict[date, int]):
+    def set_year_data(self, year: int, data: Dict[date, int]):
         """
-        更新热力图数据
+        设置年份数据
         
         Args:
-            data: 日期到字数的映射字典
+            year: 年份
+            data: 日期到字符数的映射
         """
-        for cell_date, cell in self.cells.items():
-            word_count = data.get(cell_date, 0)
-            cell.set_word_count(word_count)
+        self.year = year
+        self.data = data
+        
+        # 更新年份标签
+        self.year_label.setText(str(year))
+        
+        # 如果年份变化，重新创建网格
+        if self.year != year or not self.cells:
+            self._create_heatmap_grid()
+        else:
+            # 只更新数据
+            self._update_cells()
     
-    def set_cell_data(self, cell_date: date, word_count: int):
+    def set_selected_date(self, selected_date: date):
         """
-        设置单个单元格的数据
+        设置选中的日期
         
         Args:
-            cell_date: 日期
-            word_count: 字数
+            selected_date: 选中的日期
         """
-        if cell_date in self.cells:
-            self.cells[cell_date].set_word_count(word_count)
-    
-    def get_current_year(self) -> int:
-        """
-        获取当前显示的年份
+        # 清除之前的选中状态
+        if self.selected_date and self.selected_date in self.cells:
+            self.cells[self.selected_date].set_selected(False)
         
-        Returns:
-            int: 当前年份
-        """
-        return self.current_year
+        # 设置新的选中日期
+        self.selected_date = selected_date
+        
+        # 更新新日期的选中状态
+        if selected_date in self.cells:
+            self.cells[selected_date].set_selected(True)
+        
+        # 如果选中的日期不在当前年份，切换年份
+        if selected_date.year != self.year:
+            self.set_year(selected_date.year)
+            # 重新设置选中（因为网格重建了）
+            if selected_date in self.cells:
+                self.cells[selected_date].set_selected(True)
     
-    def previous_year(self):
+    def update_date_value(self, entry_date: date, value: int):
         """
-        切换到上一年
+        更新指定日期的值
+        
+        Args:
+            entry_date: 日期
+            value: 新的字符数
         """
-        self.load_year(self.current_year - 1)
-    
-    def next_year(self):
-        """
-        切换到下一年
-        """
-        self.load_year(self.current_year + 1)
+        # 更新数据
+        self.data[entry_date] = value
+        
+        # 如果该日期在当前显示的网格中，更新单元格
+        if entry_date in self.cells:
+            self.cells[entry_date].set_value(value)

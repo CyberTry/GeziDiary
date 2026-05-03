@@ -1,249 +1,326 @@
+# -*- coding: utf-8 -*-
 """
-Markdown编辑器组件
-==================
-提供Markdown编辑和实时预览功能的自定义组件。
-包含编辑区和预览区两个面板，支持同步滚动。
+GeziDiary - 鸽子日记
+Markdown编辑器模块
+
+功能：提供Markdown编辑和实时预览功能
 """
 
+from typing import Optional
+
+# ============================================
+# PyQt6 导入
+# ============================================
 from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QTextEdit, 
-    QSplitter, QFrame, QLabel, QToolBar, QPushButton,
-    QFileDialog, QMessageBox
+    QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
+    QTextEdit, QPlainTextEdit, QLabel, QLineEdit,
+    QPushButton, QDialog, QGridLayout
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QAction, QKeySequence, QFont
-from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtGui import (
+    QFont, QTextCharFormat, QColor, QSyntaxHighlighter,
+    QTextDocument, QKeyEvent, QAction
+)
 
-from ..core.markdown_processor import MarkdownProcessor
+# ============================================
+# 本地模块导入
+# ============================================
+from core.markdown_processor import MarkdownProcessor
+
+
+class MarkdownHighlighter(QSyntaxHighlighter):
+    """
+    Markdown语法高亮器
+    
+    为Markdown编辑器提供语法高亮功能
+    
+    Attributes:
+        highlighting_rules (list): 高亮规则列表
+    """
+    
+    def __init__(self, parent=None):
+        """
+        初始化语法高亮器
+        
+        Args:
+            parent: 父文档
+        """
+        super().__init__(parent)
+        
+        # ============================================
+        # 定义高亮规则
+        # ============================================
+        self.highlighting_rules = []
+        
+        # 标题样式（# ## ### 等）
+        header_format = QTextCharFormat()
+        header_format.setForeground(QColor('#22863a'))
+        header_format.setFontWeight(QFont.Weight.Bold)
+        self.highlighting_rules.append((r'^#{1,6}\s.*$', header_format))
+        
+        # 粗体 **text** 或 __text__
+        bold_format = QTextCharFormat()
+        bold_format.setFontWeight(QFont.Weight.Bold)
+        self.highlighting_rules.append((r'\*\*[^*]+\*\*', bold_format))
+        self.highlighting_rules.append((r'__[^_]+__', bold_format))
+        
+        # 斜体 *text* 或 _text_
+        italic_format = QTextCharFormat()
+        italic_format.setFontItalic(True)
+        self.highlighting_rules.append((r'\*[^*]+\*', italic_format))
+        self.highlighting_rules.append((r'_[^_]+_', italic_format))
+        
+        # 行内代码 `code`
+        code_format = QTextCharFormat()
+        code_format.setForeground(QColor('#032f62'))
+        code_format.setBackground(QColor('#f6f8fa'))
+        code_format.setFontFamily('Consolas, monospace')
+        self.highlighting_rules.append((r'`[^`]+`', code_format))
+        
+        # 链接 [text](url)
+        link_format = QTextCharFormat()
+        link_format.setForeground(QColor('#0366d6'))
+        self.highlighting_rules.append((r'\[([^\]]+)\]\([^)]+\)', link_format))
+        
+        # 图片 ![alt](url)
+        image_format = QTextCharFormat()
+        image_format.setForeground(QColor('#6f42c1'))
+        self.highlighting_rules.append((r'!\[([^\]]*)\]\([^)]+\)', image_format))
+        
+        # 引用 > text
+        quote_format = QTextCharFormat()
+        quote_format.setForeground(QColor('#6a737d'))
+        self.highlighting_rules.append((r'^>\s.*$', quote_format))
+        
+        # 列表项 - * + 1.
+        list_format = QTextCharFormat()
+        list_format.setForeground(QColor('#22863a'))
+        self.highlighting_rules.append((r'^[\*\-\+]\s', list_format))
+        self.highlighting_rules.append((r'^\d+\.\s', list_format))
+        
+        # 代码块 ```
+        code_block_format = QTextCharFormat()
+        code_block_format.setForeground(QColor('#032f62'))
+        code_block_format.setBackground(QColor('#f6f8fa'))
+        self.highlighting_rules.append((r'^```[\s\S]*?```$', code_block_format))
+    
+    def highlightBlock(self, text: str):
+        """
+        高亮文本块
+        
+        Args:
+            text: 要处理的文本行
+        """
+        import re
+        
+        # 应用每条高亮规则
+        for pattern, format_obj in self.highlighting_rules:
+            expression = re.compile(pattern, re.MULTILINE)
+            for match in expression.finditer(text):
+                start = match.start()
+                length = match.end() - start
+                self.setFormat(start, length, format_obj)
+
+
+class MarkdownTextEdit(QPlainTextEdit):
+    """
+    Markdown文本编辑器
+    
+    支持语法高亮的纯文本编辑器
+    
+    Signals:
+        content_changed: 内容变化时发射
+        save_requested: 请求保存时发射（Ctrl+S）
+    """
+    
+    content_changed = pyqtSignal()
+    save_requested = pyqtSignal()
+    
+    def __init__(self, parent=None):
+        """
+        初始化编辑器
+        
+        Args:
+            parent: 父部件
+        """
+        super().__init__(parent)
+        
+        # ============================================
+        # 设置编辑器属性
+        # ============================================
+        # 设置字体
+        font = QFont('Consolas', 11)
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        self.setFont(font)
+        
+        # 启用自动换行
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        
+        # 设置Tab宽度
+        self.setTabStopDistance(40)
+        
+        # ============================================
+        # 设置语法高亮
+        # ============================================
+        self.highlighter = MarkdownHighlighter(self.document())
+        
+        # ============================================
+        # 连接信号
+        # ============================================
+        self.textChanged.connect(self._on_text_changed)
+    
+    def _on_text_changed(self):
+        """
+        处理文本变化
+        """
+        self.content_changed.emit()
+    
+    def keyPressEvent(self, event: QKeyEvent):
+        """
+        处理按键事件
+        
+        Args:
+            event: 按键事件
+        """
+        # Ctrl+S 保存
+        if event.key() == Qt.Key.Key_S and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            self.save_requested.emit()
+            return
+        
+        # Tab键插入空格
+        if event.key() == Qt.Key.Key_Tab:
+            self.insertPlainText('    ')
+            return
+        
+        # 处理其他按键
+        super().keyPressEvent(event)
+    
+    def insert_markdown(self, markdown_text: str):
+        """
+        插入Markdown文本
+        
+        Args:
+            markdown_text: Markdown文本
+        """
+        self.insertPlainText(markdown_text)
 
 
 class MarkdownEditor(QWidget):
     """
-    Markdown编辑器组件
+    Markdown编辑器部件
     
-    提供双栏布局：左侧编辑区，右侧预览区。
-    支持实时预览、工具栏快捷操作等功能。
+    整合编辑器和预览功能
+    
+    Attributes:
+        markdown_processor (MarkdownProcessor): Markdown处理器
+        is_modified (bool): 内容是否被修改
     
     Signals:
-        content_changed: 当内容发生变化时发射
-        save_requested: 当用户请求保存时发射
+        content_changed: 内容变化时发射
+        save_requested: 请求保存时发射
     """
     
-    # 定义信号
-    content_changed = pyqtSignal()  # 内容变化信号
-    save_requested = pyqtSignal()   # 保存请求信号
+    content_changed = pyqtSignal()
+    save_requested = pyqtSignal()
     
     def __init__(self, parent=None):
         """
         初始化Markdown编辑器
         
         Args:
-            parent: 父组件
+            parent: 父部件
         """
         super().__init__(parent)
         
-        # 创建Markdown处理器
-        self.md_processor = MarkdownProcessor()
-        
-        # 当前编辑的文件路径（用于标题显示等）
-        self.current_file = None
-        
-        # 标记是否有未保存的更改
+        # ============================================
+        # 初始化属性
+        # ============================================
+        self.markdown_processor = MarkdownProcessor()
         self._is_modified = False
+        self._content = ''
         
-        # 初始化UI
-        self._init_ui()
+        # ============================================
+        # 设置UI
+        # ============================================
+        self._setup_ui()
         
-        # 设置自动预览定时器（延迟预览，避免频繁刷新）
-        self.preview_timer = QTimer()
-        self.preview_timer.setSingleShot(True)  # 单次触发
+        # ============================================
+        # 设置预览更新定时器
+        # ============================================
+        self.preview_timer = QTimer(self)
+        self.preview_timer.setSingleShot(True)
         self.preview_timer.timeout.connect(self._update_preview)
     
-    def _init_ui(self):
+    def _setup_ui(self):
         """
-        初始化用户界面
+        设置UI布局
         """
-        # 创建主布局
+        # 主布局
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         
-        # 创建工具栏
-        self._create_toolbar()
-        layout.addWidget(self.toolbar)
-        
-        # 创建分割器（用于调整编辑区和预览区宽度）
+        # ============================================
+        # 创建分割器（编辑 | 预览）
+        # ============================================
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        
-        # 创建编辑区
-        self.editor = QTextEdit()
-        self.editor.setPlaceholderText("在此输入Markdown内容...")
-        self.editor.textChanged.connect(self._on_text_changed)
-        
-        # 设置编辑器字体
-        font = QFont("Consolas", 12)
-        font.setFixedPitch(True)
-        self.editor.setFont(font)
-        
-        # 创建预览区
-        self.preview = QWebEngineView()
-        self.preview.setHtml(self._get_empty_preview())
-        
-        # 将编辑区和预览区添加到分割器
-        self.splitter.addWidget(self.editor)
-        self.splitter.addWidget(self.preview)
-        
-        # 设置分割比例（默认各占50%）
-        self.splitter.setSizes([500, 500])
-        
-        # 将分割器添加到布局
         layout.addWidget(self.splitter)
         
-        # 创建状态栏
-        self._create_statusbar()
-        layout.addWidget(self.statusbar)
+        # ============================================
+        # 编辑器区域
+        # ============================================
+        editor_container = QWidget()
+        editor_layout = QVBoxLayout(editor_container)
+        editor_layout.setContentsMargins(10, 10, 10, 10)
+        editor_layout.setSpacing(5)
+        
+        # 编辑器标签
+        editor_label = QLabel('编辑')
+        editor_label.setFont(QFont('Microsoft YaHei', 10, QFont.Weight.Bold))
+        editor_layout.addWidget(editor_label)
+        
+        # Markdown编辑器
+        self.text_edit = MarkdownTextEdit()
+        self.text_edit.content_changed.connect(self._on_content_changed)
+        self.text_edit.save_requested.connect(self.save_requested.emit)
+        editor_layout.addWidget(self.text_edit)
+        
+        self.splitter.addWidget(editor_container)
+        
+        # ============================================
+        # 预览区域
+        # ============================================
+        preview_container = QWidget()
+        preview_layout = QVBoxLayout(preview_container)
+        preview_layout.setContentsMargins(10, 10, 10, 10)
+        preview_layout.setSpacing(5)
+        
+        # 预览标签
+        preview_label = QLabel('预览')
+        preview_label.setFont(QFont('Microsoft YaHei', 10, QFont.Weight.Bold))
+        preview_layout.addWidget(preview_label)
+        
+        # 预览控件（使用QTextEdit显示HTML）
+        self.preview = QTextEdit()
+        self.preview.setReadOnly(True)
+        self.preview.setFont(QFont('Microsoft YaHei', 10))
+        preview_layout.addWidget(self.preview)
+        
+        self.splitter.addWidget(preview_container)
+        
+        # ============================================
+        # 设置分割比例
+        # ============================================
+        self.splitter.setSizes([500, 500])
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 1)
     
-    def _create_toolbar(self):
+    def _on_content_changed(self):
         """
-        创建工具栏
-        
-        提供常用的Markdown格式快捷按钮。
-        """
-        self.toolbar = QFrame()
-        self.toolbar.setFixedHeight(40)
-        toolbar_layout = QHBoxLayout(self.toolbar)
-        toolbar_layout.setContentsMargins(10, 5, 10, 5)
-        toolbar_layout.setSpacing(10)
-        
-        # 标题按钮
-        btn_h1 = QPushButton("H1")
-        btn_h1.setFixedSize(40, 28)
-        btn_h1.setToolTip("一级标题 (# )")
-        btn_h1.clicked.connect(lambda: self._insert_prefix("# "))
-        
-        btn_h2 = QPushButton("H2")
-        btn_h2.setFixedSize(40, 28)
-        btn_h2.setToolTip("二级标题 (## )")
-        btn_h2.clicked.connect(lambda: self._insert_prefix("## "))
-        
-        btn_h3 = QPushButton("H3")
-        btn_h3.setFixedSize(40, 28)
-        btn_h3.setToolTip("三级标题 (### )")
-        btn_h3.clicked.connect(lambda: self._insert_prefix("### "))
-        
-        # 格式按钮
-        btn_bold = QPushButton("B")
-        btn_bold.setFixedSize(32, 28)
-        btn_bold.setToolTip("粗体 (**text**)")
-        btn_bold.setStyleSheet("font-weight: bold;")
-        btn_bold.clicked.connect(lambda: self._wrap_selection("**", "**"))
-        
-        btn_italic = QPushButton("I")
-        btn_italic.setFixedSize(32, 28)
-        btn_italic.setToolTip("斜体 (*text*)")
-        btn_italic.setStyleSheet("font-style: italic;")
-        btn_italic.clicked.connect(lambda: self._wrap_selection("*", "*"))
-        
-        btn_code = QPushButton("</>")
-        btn_code.setFixedSize(40, 28)
-        btn_code.setToolTip("行内代码 (`code`)")
-        btn_code.clicked.connect(lambda: self._wrap_selection("`", "`"))
-        
-        btn_link = QPushButton("🔗")
-        btn_link.setFixedSize(32, 28)
-        btn_link.setToolTip("链接 ([text](url))")
-        btn_link.clicked.connect(self._insert_link)
-        
-        btn_list = QPushButton("☰")
-        btn_list.setFixedSize(32, 28)
-        btn_list.setToolTip("无序列表 (- )")
-        btn_list.clicked.connect(lambda: self._insert_prefix("- "))
-        
-        btn_quote = QPushButton('"')
-        btn_quote.setFixedSize(32, 28)
-        btn_quote.setToolTip("引用 (> )")
-        btn_quote.clicked.connect(lambda: self._insert_prefix("> "))
-        
-        # 添加按钮到工具栏
-        toolbar_layout.addWidget(btn_h1)
-        toolbar_layout.addWidget(btn_h2)
-        toolbar_layout.addWidget(btn_h3)
-        toolbar_layout.addSpacing(20)
-        toolbar_layout.addWidget(btn_bold)
-        toolbar_layout.addWidget(btn_italic)
-        toolbar_layout.addWidget(btn_code)
-        toolbar_layout.addWidget(btn_link)
-        toolbar_layout.addSpacing(20)
-        toolbar_layout.addWidget(btn_list)
-        toolbar_layout.addWidget(btn_quote)
-        toolbar_layout.addStretch()
-        
-        # 保存按钮
-        btn_save = QPushButton("💾 保存")
-        btn_save.setFixedSize(80, 28)
-        btn_save.clicked.connect(self.save_requested.emit)
-        toolbar_layout.addWidget(btn_save)
-    
-    def _create_statusbar(self):
-        """
-        创建状态栏
-        
-        显示字数统计等信息。
-        """
-        self.statusbar = QFrame()
-        self.statusbar.setFixedHeight(30)
-        status_layout = QHBoxLayout(self.statusbar)
-        status_layout.setContentsMargins(10, 2, 10, 2)
-        
-        # 字数统计标签
-        self.word_count_label = QLabel("字数: 0")
-        status_layout.addWidget(self.word_count_label)
-        
-        status_layout.addStretch()
-        
-        # 状态标签
-        self.status_label = QLabel("就绪")
-        status_layout.addWidget(self.status_label)
-    
-    def _get_empty_preview(self) -> str:
-        """
-        获取空预览页面的HTML
-        
-        Returns:
-            str: 空预览页面的HTML
-        """
-        return """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <style>
-                body {
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    height: 100vh;
-                    margin: 0;
-                    color: #999;
-                }
-            </style>
-        </head>
-        <body>
-            <p>预览区域</p>
-        </body>
-        </html>
-        """
-    
-    def _on_text_changed(self):
-        """
-        文本变化时的处理函数
+        处理内容变化
         """
         # 标记为已修改
         self._is_modified = True
-        
-        # 更新字数统计
-        self._update_word_count()
         
         # 发射内容变化信号
         self.content_changed.emit()
@@ -254,107 +331,49 @@ class MarkdownEditor(QWidget):
     
     def _update_preview(self):
         """
-        更新预览区域
+        更新预览
         """
-        text = self.editor.toPlainText()
-        html = self.md_processor.to_html(text)
+        # 获取编辑器内容
+        markdown_text = self.text_edit.toPlainText()
+        
+        # 转换为HTML
+        html = self.markdown_processor.to_html_with_style(markdown_text)
+        
+        # 更新预览
         self.preview.setHtml(html)
-    
-    def _update_word_count(self):
-        """
-        更新字数统计
-        """
-        text = self.editor.toPlainText()
-        plain_text = self.md_processor.get_plain_text(text)
-        
-        # 统计中文字符
-        import re
-        chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', plain_text))
-        # 统计英文单词
-        english_words = len(re.findall(r'[a-zA-Z]+', plain_text))
-        total = chinese_chars + english_words
-        
-        self.word_count_label.setText(f"字数: {total}")
-    
-    def _insert_prefix(self, prefix: str):
-        """
-        在当前行插入前缀
-        
-        Args:
-            prefix: 要插入的前缀字符串
-        """
-        cursor = self.editor.textCursor()
-        cursor.movePosition(cursor.MoveOperation.StartOfLine)
-        cursor.insertText(prefix)
-        self.editor.setTextCursor(cursor)
-        self.editor.setFocus()
-    
-    def _wrap_selection(self, prefix: str, suffix: str):
-        """
-        用前缀和后缀包裹选中的文本
-        
-        Args:
-            prefix: 前缀字符串
-            suffix: 后缀字符串
-        """
-        cursor = self.editor.textCursor()
-        
-        if cursor.hasSelection():
-            # 有选中文本，包裹它
-            selected_text = cursor.selectedText()
-            cursor.insertText(f"{prefix}{selected_text}{suffix}")
-        else:
-            # 无选中文本，插入占位符并选中
-            cursor.insertText(f"{prefix}文本{suffix}")
-            # 选中"文本"两个字
-            cursor.movePosition(cursor.MoveOperation.PreviousCharacter, cursor.MoveMode.MoveAnchor, 2)
-            cursor.movePosition(cursor.MoveOperation.PreviousCharacter, cursor.MoveMode.KeepAnchor, 2)
-        
-        self.editor.setTextCursor(cursor)
-        self.editor.setFocus()
-    
-    def _insert_link(self):
-        """
-        插入链接
-        """
-        cursor = self.editor.textCursor()
-        
-        if cursor.hasSelection():
-            selected_text = cursor.selectedText()
-            cursor.insertText(f"[{selected_text}](url)")
-        else:
-            cursor.insertText("[链接文本](url)")
-        
-        self.editor.setTextCursor(cursor)
-        self.editor.setFocus()
-    
-    def get_content(self) -> str:
-        """
-        获取编辑器内容
-        
-        Returns:
-            str: Markdown文本内容
-        """
-        return self.editor.toPlainText()
     
     def set_content(self, content: str):
         """
         设置编辑器内容
         
         Args:
-            content: Markdown文本内容
+            content: Markdown内容
         """
-        self.editor.setPlainText(content)
-        self._update_preview()
-        self._update_word_count()
+        # 保存内容
+        self._content = content
         self._is_modified = False
+        
+        # 设置编辑器文本
+        self.text_edit.setPlainText(content)
+        
+        # 更新预览
+        self._update_preview()
+    
+    def get_content(self) -> str:
+        """
+        获取编辑器内容
+        
+        Returns:
+            str: Markdown内容
+        """
+        return self.text_edit.toPlainText()
     
     def is_modified(self) -> bool:
         """
-        检查是否有未保存的更改
+        检查内容是否被修改
         
         Returns:
-            bool: 是否有未保存的更改
+            bool: 如果被修改返回True
         """
         return self._is_modified
     
@@ -366,16 +385,103 @@ class MarkdownEditor(QWidget):
             modified: 修改状态
         """
         self._is_modified = modified
-        if modified:
-            self.status_label.setText("已修改")
-        else:
-            self.status_label.setText("已保存")
     
-    def clear(self):
+    def undo(self):
         """
-        清空编辑器内容
+        撤销操作
         """
-        self.editor.clear()
-        self.preview.setHtml(self._get_empty_preview())
-        self._is_modified = False
-        self.word_count_label.setText("字数: 0")
+        self.text_edit.undo()
+    
+    def redo(self):
+        """
+        重做操作
+        """
+        self.text_edit.redo()
+    
+    def set_preview_visible(self, visible: bool):
+        """
+        设置预览区域可见性
+        
+        Args:
+            visible: 是否可见
+        """
+        # 获取预览容器的索引（在splitter中的位置）
+        index = 1  # 预览在右侧
+        
+        if visible:
+            self.splitter.widget(index).show()
+            # 恢复分割比例
+            self.splitter.setSizes([500, 500])
+        else:
+            self.splitter.widget(index).hide()
+    
+    def show_find_dialog(self):
+        """
+        显示查找对话框
+        """
+        dialog = FindDialog(self.text_edit, self)
+        dialog.exec()
+
+
+class FindDialog(QDialog):
+    """
+    查找对话框
+    
+    提供文本查找功能
+    """
+    
+    def __init__(self, text_edit: MarkdownTextEdit, parent=None):
+        """
+        初始化查找对话框
+        
+        Args:
+            text_edit: 要查找的文本编辑器
+            parent: 父部件
+        """
+        super().__init__(parent)
+        
+        self.text_edit = text_edit
+        
+        # 设置对话框属性
+        self.setWindowTitle('查找')
+        self.setFixedSize(300, 120)
+        
+        # 创建布局
+        layout = QGridLayout(self)
+        
+        # 查找输入框
+        layout.addWidget(QLabel('查找内容:'), 0, 0)
+        self.find_input = QLineEdit()
+        layout.addWidget(self.find_input, 0, 1)
+        
+        # 查找按钮
+        find_btn = QPushButton('查找下一个')
+        find_btn.clicked.connect(self.find_next)
+        layout.addWidget(find_btn, 1, 1)
+        
+        # 关闭按钮
+        close_btn = QPushButton('关闭')
+        close_btn.clicked.connect(self.close)
+        layout.addWidget(close_btn, 2, 1)
+    
+    def find_next(self):
+        """
+        查找下一个匹配项
+        """
+        text = self.find_input.text()
+        if text:
+            # 使用QTextDocument查找
+            document = self.text_edit.document()
+            cursor = self.text_edit.textCursor()
+            
+            # 从当前位置开始查找
+            found = document.find(text, cursor)
+            
+            if found.isNull():
+                # 没找到，从头开始
+                cursor.movePosition(cursor.MoveOperation.Start)
+                found = document.find(text, cursor)
+            
+            if not found.isNull():
+                # 选中找到的文本
+                self.text_edit.setTextCursor(found)

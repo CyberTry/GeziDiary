@@ -1,9 +1,7 @@
+# -*- coding: utf-8 -*-
 """
-工具模块
-========
-包含各种实用工具函数和类。
+GeziDiary - 鸽子日记
+utils包初始化文件
+
+工具函数模块，包含各种辅助函数
 """
-
-from .helpers import format_date, get_word_count_text
-
-__all__ = ['format_date', 'get_word_count_text']

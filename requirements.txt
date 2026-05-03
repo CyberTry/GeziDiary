@@ -1,18 +1,15 @@
-# GeziDiary 依赖清单
-# ==================
-# 所有依赖均已内置，如需单独安装可使用: pip install -r requirements.txt
+# GeziDiary - 鸽子日记
+# Python依赖包列表
+# 所有依赖将在打包时内置到可执行文件中
 
-# GUI框架 - 跨平台桌面应用
+# GUI框架 - 现代化的Python GUI库
 PyQt6==6.6.1
-PyQt6-Qt6==6.6.1
-PyQt6-sip==13.6.0
-PyQt6-WebEngine==6.6.0
 
-# Markdown解析与渲染
-markdown==3.5.2
+# Markdown渲染支持
+markdown==3.5.1
+
+# 代码高亮支持
+Pygments==2.17.2
 
 # 日期时间处理
 python-dateutil==2.8.2
-
-# 配置管理
-PyYAML==6.0.1

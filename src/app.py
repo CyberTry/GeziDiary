@@ -1,270 +1,139 @@
+# -*- coding: utf-8 -*-
 """
-应用主入口模块
-==============
-负责初始化应用程序和主窗口
+GeziDiary - 鸽子日记
+应用程序主类
+
+功能：管理应用生命周期、初始化配置、创建主窗口
 """
 
 import sys
 import os
 
-# 导入PyQt6相关类
+# ============================================
+# PyQt6 导入 - GUI框架
+# ============================================
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
-from PyQt6.QtWebEngineCore import QWebEngineProfile
+from PyQt6.QtGui import QFont, QFontDatabase
 
-# 导入主窗口类
-from src.ui.main_window import MainWindow
+# ============================================
+# 本地模块导入
+# ============================================
+from core.config import ConfigManager
+from ui.main_window import MainWindow
 
-# 导入配置管理器
-from src.core.config import ConfigManager
 
-
-def setup_application():
+class DiaryApplication(QApplication):
     """
-    配置应用程序全局设置
+    日记应用程序主类
     
-    设置包括：
-    - 高DPI支持
-    - 应用程序样式
-    - 全局字体
-    """
-    # 启用高DPI支持，确保在高分辨率屏幕上显示清晰
-    if hasattr(Qt, 'AA_EnableHighDpiScaling'):
-        QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
-    if hasattr(Qt, 'AA_UseHighDpiPixmaps'):
-        QApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
-
-
-def load_stylesheet(app):
-    """
-    加载应用程序样式表
+    继承自QApplication，管理整个应用的生命周期
+    负责初始化配置、加载字体、创建主窗口
     
-    Args:
-        app: QApplication实例
-    """
-    # 定义现代扁平化风格的样式表
-    stylesheet = """
-    /* ==================== 全局样式 ==================== */
-    
-    /* 主窗口背景 */
-    QMainWindow {
-        background-color: #f6f8fa;
-    }
-    
-    /* 侧边栏样式 */
-    QWidget#sidebar {
-        background-color: #ffffff;
-        border-right: 1px solid #e1e4e8;
-    }
-    
-    /* 按钮基础样式 */
-    QPushButton {
-        background-color: #2ea44f;
-        color: white;
-        border: none;
-        border-radius: 6px;
-        padding: 8px 16px;
-        font-size: 14px;
-        font-weight: 500;
-    }
-    
-    QPushButton:hover {
-        background-color: #2c974b;
-    }
-    
-    QPushButton:pressed {
-        background-color: #298e46;
-    }
-    
-    QPushButton:disabled {
-        background-color: #94d3a2;
-        color: rgba(255, 255, 255, 0.8);
-    }
-    
-    /* 次要按钮样式 */
-    QPushButton#secondary {
-        background-color: #f6f8fa;
-        color: #24292e;
-        border: 1px solid #e1e4e8;
-    }
-    
-    QPushButton#secondary:hover {
-        background-color: #f3f4f6;
-    }
-    
-    /* 输入框样式 */
-    QLineEdit, QTextEdit {
-        background-color: #ffffff;
-        border: 1px solid #e1e4e8;
-        border-radius: 6px;
-        padding: 8px 12px;
-        font-size: 14px;
-        color: #24292e;
-    }
-    
-    QLineEdit:focus, QTextEdit:focus {
-        border-color: #2ea44f;
-    }
-    
-    /* 标签样式 */
-    QLabel {
-        color: #24292e;
-        font-size: 14px;
-    }
-    
-    QLabel#title {
-        font-size: 20px;
-        font-weight: 600;
-        color: #24292e;
-    }
-    
-    QLabel#subtitle {
-        font-size: 16px;
-        font-weight: 500;
-        color: #586069;
-    }
-    
-    /* 日历控件样式 */
-    QCalendarWidget {
-        background-color: #ffffff;
-        border: 1px solid #e1e4e8;
-        border-radius: 6px;
-    }
-    
-    QCalendarWidget QToolButton {
-        background-color: transparent;
-        color: #24292e;
-        font-weight: 500;
-    }
-    
-    QCalendarWidget QMenu {
-        background-color: #ffffff;
-        border: 1px solid #e1e4e8;
-    }
-    
-    QCalendarWidget QSpinBox {
-        background-color: #ffffff;
-        border: 1px solid #e1e4e8;
-    }
-    
-    /* 滚动条样式 */
-    QScrollBar:vertical {
-        background-color: #f6f8fa;
-        width: 12px;
-        border-radius: 6px;
-    }
-    
-    QScrollBar::handle:vertical {
-        background-color: #c6cbd1;
-        border-radius: 6px;
-        min-height: 30px;
-    }
-    
-    QScrollBar::handle:vertical:hover {
-        background-color: #959da5;
-    }
-    
-    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-        height: 0px;
-    }
-    
-    /* 列表样式 */
-    QListWidget {
-        background-color: #ffffff;
-        border: 1px solid #e1e4e8;
-        border-radius: 6px;
-        outline: none;
-    }
-    
-    QListWidget::item {
-        padding: 10px;
-        border-bottom: 1px solid #e1e4e8;
-    }
-    
-    QListWidget::item:selected {
-        background-color: #f1f8ff;
-        color: #24292e;
-    }
-    
-    QListWidget::item:hover {
-        background-color: #f6f8fa;
-    }
-    
-    /* 对话框样式 */
-    QDialog {
-        background-color: #ffffff;
-    }
-    
-    /* 分组框样式 */
-    QGroupBox {
-        font-weight: 600;
-        border: 1px solid #e1e4e8;
-        border-radius: 6px;
-        margin-top: 12px;
-        padding-top: 16px;
-    }
-    
-    QGroupBox::title {
-        subcontrol-origin: margin;
-        left: 12px;
-        padding: 0 8px;
-        color: #586069;
-    }
-    
-    /* 菜单样式 */
-    QMenuBar {
-        background-color: #ffffff;
-        border-bottom: 1px solid #e1e4e8;
-    }
-    
-    QMenuBar::item:selected {
-        background-color: #f6f8fa;
-    }
-    
-    QMenu {
-        background-color: #ffffff;
-        border: 1px solid #e1e4e8;
-    }
-    
-    QMenu::item:selected {
-        background-color: #f1f8ff;
-    }
+    Attributes:
+        config (ConfigManager): 配置管理器实例
+        main_window (MainWindow): 主窗口实例
     """
     
-    # 应用样式表
-    app.setStyleSheet(stylesheet)
-
-
-def main():
-    """
-    应用程序主入口函数
+    def __init__(self):
+        """
+        初始化应用程序
+        
+        功能：
+            1. 初始化父类QApplication
+            2. 设置应用属性（高DPI支持等）
+            3. 加载配置
+            4. 初始化UI
+        """
+        # 初始化父类，传递命令行参数
+        super().__init__(sys.argv)
+        
+        # ============================================
+        # 应用基本设置
+        # ============================================
+        # 设置应用名称（用于窗口标题、任务栏显示等）
+        self.setApplicationName('GeziDiary')
+        # 设置应用显示名称（中文名）
+        self.setApplicationDisplayName('鸽子日记')
+        # 设置应用版本
+        self.setApplicationVersion('1.0.0')
+        
+        # ============================================
+        # 高DPI支持设置 (PyQt6默认启用高DPI支持)
+        # ============================================
+        # PyQt6 默认启用高DPI支持，无需手动设置AA_EnableHighDpiScaling
+        # 设置DPI缩放策略
+        self.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
+        
+        # ============================================
+        # 初始化配置管理器
+        # ============================================
+        # ConfigManager会加载或创建默认配置
+        self.config = ConfigManager()
+        
+        # ============================================
+        # 设置全局字体
+        # ============================================
+        self._setup_fonts()
+        
+        # ============================================
+        # 创建并显示主窗口
+        # ============================================
+        self.main_window = MainWindow(self.config)
+        self.main_window.show()
     
-    初始化并启动整个应用程序
-    """
-    # 配置应用程序
-    setup_application()
+    def _setup_fonts(self):
+        """
+        设置应用程序全局字体
+        
+        功能：
+            1. 尝试加载系统默认中文字体
+            2. 设置全局字体大小
+            3. 确保中文显示正常
+        """
+        # 优先使用的中文字体列表（按优先级排序）
+        # 这些字体在Windows和macOS上通常都有
+        preferred_fonts = [
+            'Microsoft YaHei',      # 微软雅黑（Windows首选）
+            'PingFang SC',          # 苹方（macOS首选）
+            'Source Han Sans SC',   # 思源黑体
+            'Noto Sans CJK SC',     # Noto中文
+            'WenQuanYi Micro Hei',  # 文泉驿（Linux）
+            'SimHei',               # 黑体（备用）
+        ]
+        
+        # 获取系统所有可用字体族（PyQt6使用静态方法）
+        available_families = QFontDatabase.families()
+        
+        # 选择第一个可用的中文字体
+        selected_font = None
+        for font_name in preferred_fonts:
+            if font_name in available_families:
+                selected_font = font_name
+                break
+        
+        # 如果没有找到首选字体，使用系统默认字体
+        if not selected_font:
+            selected_font = self.font().family()
+        
+        # 创建字体对象并设置属性
+        font = QFont(selected_font)
+        # 设置字体大小（9pt是标准大小）
+        font.setPointSize(9)
+        # 设置字体权重为正常（PyQt6使用枚举）
+        font.setWeight(QFont.Weight.Normal)
+        
+        # 应用全局字体
+        self.setFont(font)
     
-    # 创建应用程序实例
-    app = QApplication(sys.argv)
-    
-    # 设置应用程序信息
-    app.setApplicationName("GeziDiary")
-    app.setApplicationVersion("1.0.0")
-    app.setOrganizationName("鸽子工作室")
-    
-    # 加载样式表
-    load_stylesheet(app)
-    
-    # 初始化配置管理器
-    config = ConfigManager()
-    
-    # 创建并显示主窗口
-    window = MainWindow(config)
-    window.show()
-    
-    # 进入应用程序主循环
-    sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()
+    def exec(self):
+        """
+        启动应用程序事件循环
+        
+        Returns:
+            int: 应用程序退出码
+        """
+        # 调用父类的exec方法进入事件循环
+        return super().exec()

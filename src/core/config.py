@@ -1,16 +1,14 @@
+# -*- coding: utf-8 -*-
 """
+GeziDiary - 鸽子日记
 配置管理模块
-============
-负责应用程序配置的读取、保存和管理
 
-支持的功能：
-- 自定义日记存储路径
-- 应用设置持久化
-- 配置文件的YAML格式存储
+功能：管理应用程序配置，包括存储路径、界面设置等
+配置文件保存为JSON格式
 """
 
 import os
-import yaml
+import json
 from pathlib import Path
 
 
@@ -18,261 +16,223 @@ class ConfigManager:
     """
     配置管理器类
     
-    负责管理应用程序的所有配置项，包括：
-    - 日记存储路径
-    - 界面设置
-    - 用户偏好
+    负责加载、保存和管理应用程序配置
+    配置存储在用户目录下的JSON文件中
     
     Attributes:
-        config_dir: 配置文件目录路径
-        config_file: 配置文件完整路径
-        config: 当前配置字典
+        config_file (str): 配置文件路径
+        config (dict): 配置数据字典
+        default_config (dict): 默认配置
+    
+    使用示例：
+        >>> config = ConfigManager()
+        >>> storage_path = config.get('storage_path')
+        >>> config.set('theme', 'dark')
+        >>> config.save()
     """
+    
+    # ============================================
+    # 默认配置常量
+    # ============================================
+    DEFAULT_CONFIG = {
+        # 日记存储路径（默认在用户文档目录下）
+        'storage_path': '',
+        # 界面主题（light/dark/auto）
+        'theme': 'light',
+        # 编辑器字体大小
+        'editor_font_size': 14,
+        # 预览字体大小
+        'preview_font_size': 14,
+        # 自动保存间隔（秒，0表示禁用）
+        'auto_save_interval': 30,
+        # 窗口尺寸
+        'window_width': 1200,
+        'window_height': 800,
+        # 窗口位置（-1表示居中）
+        'window_x': -1,
+        'window_y': -1,
+        # 侧边栏宽度
+        'sidebar_width': 280,
+        # 编辑器/预览分割比例
+        'editor_split_ratio': 0.5,
+    }
     
     def __init__(self):
         """
         初始化配置管理器
         
-        创建配置目录（如果不存在）并加载现有配置
+        功能：
+            1. 确定配置文件路径
+            2. 加载现有配置或创建默认配置
         """
-        # 获取用户主目录，用于存储应用配置
-        home_dir = Path.home()
-        
-        # 设置配置目录路径（使用隐藏文件夹）
-        self.config_dir = home_dir / ".gezidiary"
-        
+        # ============================================
         # 设置配置文件路径
-        self.config_file = self.config_dir / "config.yaml"
+        # ============================================
+        # 获取应用数据目录（跨平台兼容）
+        # Windows: %APPDATA%/GeziDiary
+        # macOS: ~/Library/Application Support/GeziDiary
+        # Linux: ~/.config/GeziDiary
+        self.app_dir = self._get_app_data_dir()
         
-        # 默认配置值
-        self.default_config = {
-            # 日记存储路径，默认为用户文档目录下的GeziDiary文件夹
-            "diary_path": str(home_dir / "Documents" / "GeziDiary" / "diaries"),
-            
-            # 窗口设置
-            "window": {
-                "width": 1400,
-                "height": 900,
-                "maximized": False
-            },
-            
-            # 编辑器设置
-            "editor": {
-                "font_size": 14,
-                "tab_size": 4,
-                "word_wrap": True,
-                "auto_save": True,
-                "auto_save_interval": 30  # 秒
-            },
-            
-            # 日历热力图设置
-            "heatmap": {
-                "color_scheme": "github",  # github, gitlab, orange
-                "show_weeks": 53  # 显示多少周的记录
-            }
-        }
+        # 确保应用数据目录存在
+        os.makedirs(self.app_dir, exist_ok=True)
         
-        # 当前配置
-        self.config = {}
+        # 配置文件完整路径
+        self.config_file = os.path.join(self.app_dir, 'config.json')
         
-        # 初始化配置
-        self._init_config()
+        # ============================================
+        # 加载配置
+        # ============================================
+        # 先复制默认配置
+        self.config = self.DEFAULT_CONFIG.copy()
+        
+        # 从文件加载配置并合并
+        self._load_config()
+        
+        # 如果存储路径为空，设置默认路径
+        if not self.config.get('storage_path'):
+            self.config['storage_path'] = self._get_default_storage_path()
     
-    def _init_config(self):
+    def _get_app_data_dir(self) -> str:
         """
-        初始化配置
+        获取应用数据目录路径
         
-        创建配置目录，加载或创建配置文件
+        根据操作系统返回合适的应用数据目录
+        
+        Returns:
+            str: 应用数据目录的绝对路径
         """
-        # 确保配置目录存在
-        self.config_dir.mkdir(parents=True, exist_ok=True)
+        # 获取用户主目录
+        home = Path.home()
         
-        # 加载配置，如果不存在则创建默认配置
-        if self.config_file.exists():
-            self.load_config()
+        # 根据操作系统选择合适的路径
+        if os.name == 'nt':  # Windows
+            # 使用APPDATA环境变量，如果不存在则使用用户目录
+            app_data = os.environ.get('APPDATA', str(home))
+            return os.path.join(app_data, 'GeziDiary')
+        elif os.name == 'posix':
+            # 检查是否为macOS
+            if os.uname().sysname == 'Darwin':
+                return str(home / 'Library' / 'Application Support' / 'GeziDiary')
+            else:  # Linux
+                config_dir = os.environ.get('XDG_CONFIG_HOME', str(home / '.config'))
+                return os.path.join(config_dir, 'GeziDiary')
         else:
-            self.config = self.default_config.copy()
-            self.save_config()
-        
-        # 确保日记存储目录存在
-        diary_path = Path(self.config["diary_path"])
-        diary_path.mkdir(parents=True, exist_ok=True)
+            # 其他系统使用用户目录
+            return str(home / '.gezidiary')
     
-    def load_config(self):
+    def _get_default_storage_path(self) -> str:
         """
-        从文件加载配置
+        获取默认日记存储路径
         
-        如果配置文件损坏，使用默认配置
+        Returns:
+            str: 默认存储路径
         """
+        # 默认存储在用户文档目录下的GeziDiary文件夹
+        documents = Path.home() / 'Documents'
+        
+        # 如果Documents目录不存在，使用用户主目录
+        if not documents.exists():
+            documents = Path.home()
+        
+        return str(documents / 'GeziDiary' / 'Diaries')
+    
+    def _load_config(self):
+        """
+        从配置文件加载配置
+        
+        如果配置文件不存在或损坏，使用默认配置
+        """
+        # 检查配置文件是否存在
+        if not os.path.exists(self.config_file):
+            # 配置文件不存在，使用默认配置
+            return
+        
         try:
+            # 打开并读取配置文件
             with open(self.config_file, 'r', encoding='utf-8') as f:
-                loaded_config = yaml.safe_load(f)
-                
-            # 合并加载的配置和默认配置，确保所有必要的键都存在
-            self.config = self._merge_config(self.default_config, loaded_config or {})
+                loaded_config = json.load(f)
             
-        except Exception as e:
-            # 加载失败时使用默认配置
-            print(f"加载配置文件失败: {e}，使用默认配置")
-            self.config = self.default_config.copy()
+            # 合并加载的配置到默认配置
+            # 这样新增的配置项也能被正确处理
+            self.config.update(loaded_config)
+            
+        except json.JSONDecodeError:
+            # JSON解析错误，配置文件损坏
+            # 保留默认配置，将在下次保存时覆盖损坏的文件
+            pass
+        except Exception:
+            # 其他错误，同样使用默认配置
+            pass
     
-    def save_config(self):
+    def save(self):
         """
         保存配置到文件
         
-        将当前配置以YAML格式写入配置文件
+        将当前配置持久化到JSON文件
         """
         try:
+            # 以UTF-8编码写入JSON文件
+            # indent=4使JSON文件可读性更好
             with open(self.config_file, 'w', encoding='utf-8') as f:
-                yaml.dump(self.config, f, allow_unicode=True, default_flow_style=False)
+                json.dump(self.config, f, ensure_ascii=False, indent=4)
         except Exception as e:
-            print(f"保存配置文件失败: {e}")
+            # 保存失败时打印错误（在生产环境可能需要更优雅的处理）
+            print(f"保存配置失败: {e}")
     
-    def _merge_config(self, default, loaded):
-        """
-        递归合并配置字典
-        
-        Args:
-            default: 默认配置字典
-            loaded: 已加载的配置字典
-            
-        Returns:
-            合并后的配置字典
-        """
-        result = default.copy()
-        
-        for key, value in loaded.items():
-            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                # 递归合并嵌套字典
-                result[key] = self._merge_config(result[key], value)
-            else:
-                result[key] = value
-        
-        return result
-    
-    def get(self, key, default=None):
+    def get(self, key: str, default=None):
         """
         获取配置项的值
         
-        支持使用点号访问嵌套配置，如 "editor.font_size"
-        
         Args:
-            key: 配置项键名
-            default: 默认值
-            
+            key: 配置项名称
+            default: 默认值（如果配置项不存在）
+        
         Returns:
-            配置项的值
+            配置项的值，如果不存在则返回default
         """
-        keys = key.split('.')
-        value = self.config
-        
-        for k in keys:
-            if isinstance(value, dict) and k in value:
-                value = value[k]
-            else:
-                return default
-        
-        return value
+        return self.config.get(key, default)
     
-    def set(self, key, value):
+    def set(self, key: str, value):
         """
         设置配置项的值
         
-        支持使用点号设置嵌套配置
-        
         Args:
-            key: 配置项键名
-            value: 要设置的值
+            key: 配置项名称
+            value: 配置项值
         """
-        keys = key.split('.')
-        config = self.config
-        
-        # 遍历到倒数第二个键
-        for k in keys[:-1]:
-            if k not in config:
-                config[k] = {}
-            config = config[k]
-        
-        # 设置最终值
-        config[keys[-1]] = value
-        
-        # 自动保存配置
-        self.save_config()
+        self.config[key] = value
     
-    def get_diary_path(self):
+    def get_storage_path(self) -> str:
         """
         获取日记存储路径
         
         Returns:
-            日记存储目录的Path对象
+            str: 日记存储目录的绝对路径
         """
-        return Path(self.config["diary_path"])
+        path = self.get('storage_path')
+        
+        # 确保存储目录存在
+        if path and not os.path.exists(path):
+            try:
+                os.makedirs(path, exist_ok=True)
+            except Exception:
+                pass
+        
+        return path
     
-    def set_diary_path(self, path):
+    def set_storage_path(self, path: str):
         """
         设置日记存储路径
         
         Args:
             path: 新的存储路径
         """
-        # 转换为Path对象并创建目录
-        diary_path = Path(path)
-        diary_path.mkdir(parents=True, exist_ok=True)
+        # 规范化路径（转换为绝对路径）
+        abs_path = os.path.abspath(os.path.expanduser(path))
+        
+        # 确保目录存在
+        os.makedirs(abs_path, exist_ok=True)
         
         # 更新配置
-        self.config["diary_path"] = str(diary_path)
-        self.save_config()
-    
-    def get_editor_font_size(self):
-        """
-        获取编辑器字体大小
-        
-        Returns:
-            字体大小（像素）
-        """
-        return self.get("editor.font_size", 14)
-    
-    def set_editor_font_size(self, size):
-        """
-        设置编辑器字体大小
-        
-        Args:
-            size: 字体大小
-        """
-        self.set("editor.font_size", size)
-    
-    def is_auto_save_enabled(self):
-        """
-        检查是否启用了自动保存
-        
-        Returns:
-            是否启用自动保存
-        """
-        return self.get("editor.auto_save", True)
-    
-    def get_auto_save_interval(self):
-        """
-        获取自动保存间隔
-        
-        Returns:
-            自动保存间隔（秒）
-        """
-        return self.get("editor.auto_save_interval", 30)
-    
-    def get_heatmap_weeks(self):
-        """
-        获取热力图显示的周数
-        
-        Returns:
-            显示的周数
-        """
-        return self.get("heatmap.show_weeks", 53)
-    
-    def get_heatmap_color_scheme(self):
-        """
-        获取热力图配色方案
-        
-        Returns:
-            配色方案名称
-        """
-        return self.get("heatmap.color_scheme", "github")
+        self.set('storage_path', abs_path)
