@@ -3,7 +3,7 @@
 GeziDiary - 鸽子日记
 主窗口模块
 
-功能：创建应用程序主窗口，整合所有UI组件
+功能：创建应用程序主窗口，采用底部导航栏切换页面设计
 """
 
 from datetime import date, datetime
@@ -14,10 +14,12 @@ from typing import Optional
 # ============================================
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QStatusBar, QMessageBox, QFileDialog
+    QStackedWidget, QPushButton, QLabel, QFrame,
+    QTextEdit, QPlainTextEdit, QMessageBox, QFileDialog,
+    QToolBar, QSplitter
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QKeySequence, QIcon
+from PyQt6.QtCore import Qt, pyqtSignal, QSize
+from PyQt6.QtGui import QAction, QKeySequence, QIcon, QFont
 
 # ============================================
 # 本地模块导入
@@ -26,10 +28,8 @@ from core.config import ConfigManager
 from core.diary_manager import DiaryManager, DiaryEntry
 from core.markdown_processor import MarkdownProcessor
 
-from ui.diary_list_widget import DiaryListWidget
 from ui.heatmap_calendar import HeatmapCalendar
 from ui.markdown_editor import MarkdownEditor
-from ui.stats_widget import StatsWidget
 from ui.settings_dialog import SettingsDialog
 
 
@@ -37,21 +37,16 @@ class MainWindow(QMainWindow):
     """
     应用程序主窗口类
     
-    整合所有UI组件，提供完整的日记编辑和管理功能
+    采用底部导航栏设计，包含三个页面：
+    - 编辑页面：Markdown编辑和预览
+    - 日历页面：热力图日历
+    - 设置页面：应用设置
     
     Attributes:
         config (ConfigManager): 配置管理器
         diary_manager (DiaryManager): 日记管理器
-        markdown_processor (MarkdownProcessor): Markdown处理器
         current_entry (DiaryEntry): 当前编辑的日记条目
-        auto_save_timer (QTimer): 自动保存定时器
-    
-    Signals:
-        entry_saved: 日记保存时发射，传递日期参数
     """
-    
-    # 自定义信号：日记保存时发射
-    entry_saved = pyqtSignal(date)
     
     def __init__(self, config: ConfigManager):
         """
@@ -74,25 +69,18 @@ class MainWindow(QMainWindow):
         # 初始化UI
         # ============================================
         self._setup_window()
-        self._create_menu_bar()
-        self._create_central_widget()
-        self._create_status_bar()
-        self._setup_auto_save()
+        self._create_pages()
+        self._create_bottom_navigation()
         
         # ============================================
         # 加载初始数据
         # ============================================
-        # 默认加载今天的日记
         self.load_entry(date.today())
-        self._update_stats()
     
     def _setup_window(self):
         """
         设置窗口基本属性
-        
-        包括标题、尺寸、位置等
         """
-        # 设置窗口标题
         self.setWindowTitle('鸽子日记 - GeziDiary')
         
         # 设置窗口尺寸
@@ -100,252 +88,676 @@ class MainWindow(QMainWindow):
         height = self.config.get('window_height', 800)
         self.resize(width, height)
         
-        # 设置窗口位置
-        x = self.config.get('window_x', -1)
-        y = self.config.get('window_y', -1)
-        if x >= 0 and y >= 0:
-            self.move(x, y)
-        else:
-            # 窗口居中显示
-            self._center_window()
+        # 窗口居中
+        self._center_window()
+        
+        # 设置样式
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f5f5f5;
+            }
+        """)
     
     def _center_window(self):
         """
         将窗口居中显示
         """
-        # 获取屏幕几何信息
         screen = self.screen().geometry()
-        # 获取窗口尺寸
         size = self.geometry()
-        
-        # 计算居中位置
         x = (screen.width() - size.width()) // 2
         y = (screen.height() - size.height()) // 2
-        
         self.move(x, y)
     
-    def _create_menu_bar(self):
+    def _create_pages(self):
         """
-        创建菜单栏
-        
-        包含文件、编辑、视图、设置等菜单
+        创建三个主要页面
         """
-        # 创建菜单栏
-        menubar = self.menuBar()
+        # 创建堆叠窗口部件用于页面切换
+        self.stacked_widget = QStackedWidget()
+        self.setCentralWidget(self.stacked_widget)
         
         # ============================================
-        # 文件菜单
+        # 页面1：编辑页面
         # ============================================
-        file_menu = menubar.addMenu('文件(&F)')
-        
-        # 新建日记
-        new_action = QAction('新建(&N)', self)
-        new_action.setShortcut(QKeySequence.StandardKey.New)
-        new_action.triggered.connect(self._on_new_entry)
-        file_menu.addAction(new_action)
-        
-        # 保存
-        save_action = QAction('保存(&S)', self)
-        save_action.setShortcut(QKeySequence.StandardKey.Save)
-        save_action.triggered.connect(self._on_save)
-        file_menu.addAction(save_action)
-        
-        file_menu.addSeparator()
-        
-        # 退出
-        exit_action = QAction('退出(&Q)', self)
-        exit_action.setShortcut(QKeySequence.StandardKey.Quit)
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
+        self.edit_page = self._create_edit_page()
+        self.stacked_widget.addWidget(self.edit_page)
         
         # ============================================
-        # 编辑菜单
+        # 页面2：日历页面
         # ============================================
-        edit_menu = menubar.addMenu('编辑(&E)')
-        
-        # 撤销
-        undo_action = QAction('撤销(&U)', self)
-        undo_action.setShortcut(QKeySequence.StandardKey.Undo)
-        undo_action.triggered.connect(self._on_undo)
-        edit_menu.addAction(undo_action)
-        
-        # 重做
-        redo_action = QAction('重做(&R)', self)
-        redo_action.setShortcut(QKeySequence.StandardKey.Redo)
-        redo_action.triggered.connect(self._on_redo)
-        edit_menu.addAction(redo_action)
-        
-        edit_menu.addSeparator()
-        
-        # 查找
-        find_action = QAction('查找(&F)', self)
-        find_action.setShortcut(QKeySequence.StandardKey.Find)
-        find_action.triggered.connect(self._on_find)
-        edit_menu.addAction(find_action)
+        self.calendar_page = self._create_calendar_page()
+        self.stacked_widget.addWidget(self.calendar_page)
         
         # ============================================
-        # 视图菜单
+        # 页面3：设置页面
         # ============================================
-        view_menu = menubar.addMenu('视图(&V)')
-        
-        # 切换预览
-        self.preview_action = QAction('显示预览(&P)', self)
-        self.preview_action.setCheckable(True)
-        self.preview_action.setChecked(True)
-        self.preview_action.triggered.connect(self._on_toggle_preview)
-        view_menu.addAction(self.preview_action)
-        
-        # ============================================
-        # 设置菜单
-        # ============================================
-        settings_menu = menubar.addMenu('设置(&S)')
-        
-        # 首选项
-        prefs_action = QAction('首选项(&P)...', self)
-        prefs_action.triggered.connect(self._on_settings)
-        settings_menu.addAction(prefs_action)
+        self.settings_page = self._create_settings_page()
+        self.stacked_widget.addWidget(self.settings_page)
     
-    def _create_central_widget(self):
+    def _create_edit_page(self) -> QWidget:
         """
-        创建中央部件
+        创建编辑页面
         
-        整合左侧边栏（日历、列表）和右侧编辑区
-        """
-        # ============================================
-        # 创建主分割器
-        # ============================================
-        # 主分割器：左侧边栏 | 右侧编辑区
-        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.setCentralWidget(self.main_splitter)
-        
-        # ============================================
-        # 创建左侧边栏
-        # ============================================
-        self.sidebar = self._create_sidebar()
-        self.main_splitter.addWidget(self.sidebar)
-        
-        # ============================================
-        # 创建右侧编辑区
-        # ============================================
-        self.editor_widget = self._create_editor_widget()
-        self.main_splitter.addWidget(self.editor_widget)
-        
-        # ============================================
-        # 设置分割比例
-        # ============================================
-        sidebar_width = self.config.get('sidebar_width', 280)
-        total_width = self.width()
-        self.main_splitter.setSizes([sidebar_width, total_width - sidebar_width])
-        self.main_splitter.setStretchFactor(0, 0)
-        self.main_splitter.setStretchFactor(1, 1)
-    
-    def _create_sidebar(self) -> QWidget:
-        """
-        创建左侧边栏
-        
-        包含热力图日历、日记列表和统计信息
+        包含：
+        - 顶部Markdown工具栏
+        - 左侧代码编辑区
+        - 右侧预览区
         
         Returns:
-            QWidget: 侧边栏部件
+            QWidget: 编辑页面
         """
-        # 创建侧边栏容器
-        sidebar = QWidget()
-        sidebar.setMinimumWidth(250)
-        sidebar.setMaximumWidth(400)
-        
-        # 布局
-        layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(15)
-        
-        # ============================================
-        # 热力图日历
-        # ============================================
-        self.heatmap = HeatmapCalendar()
-        # 连接日期选择信号
-        self.heatmap.date_selected.connect(self._on_date_selected_from_heatmap)
-        layout.addWidget(self.heatmap)
-        
-        # ============================================
-        # 日记列表
-        # ============================================
-        self.diary_list = DiaryListWidget()
-        # 连接日记选择信号
-        self.diary_list.entry_selected.connect(self._on_entry_selected_from_list)
-        layout.addWidget(self.diary_list, 1)  # 占据剩余空间
-        
-        # ============================================
-        # 统计信息
-        # ============================================
-        self.stats_widget = StatsWidget()
-        layout.addWidget(self.stats_widget)
-        
-        return sidebar
-    
-    def _create_editor_widget(self) -> QWidget:
-        """
-        创建右侧编辑区
-        
-        包含Markdown编辑器和预览
-        
-        Returns:
-            QWidget: 编辑区部件
-        """
-        # 创建编辑区容器
-        widget = QWidget()
-        
-        # 布局
-        layout = QVBoxLayout(widget)
+        page = QWidget()
+        layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         
         # ============================================
-        # Markdown编辑器
+        # 顶部工具栏
         # ============================================
-        self.editor = MarkdownEditor()
+        toolbar = QToolBar()
+        toolbar.setStyleSheet("""
+            QToolBar {
+                background-color: #ffffff;
+                border-bottom: 1px solid #e0e0e0;
+                padding: 5px;
+                spacing: 5px;
+            }
+            QToolButton {
+                background-color: transparent;
+                border: 1px solid transparent;
+                border-radius: 4px;
+                padding: 5px 10px;
+                font-size: 13px;
+            }
+            QToolButton:hover {
+                background-color: #f0f0f0;
+                border-color: #d0d0d0;
+            }
+        """)
         
-        # 连接编辑器信号
-        self.editor.content_changed.connect(self._on_content_changed)
-        self.editor.save_requested.connect(self._on_save)
+        # 粗体按钮
+        bold_btn = QPushButton('𝐁 粗体')
+        bold_btn.setToolTip('Ctrl+B')
+        bold_btn.clicked.connect(lambda: self._insert_markdown('**', '**'))
+        toolbar.addWidget(bold_btn)
         
-        layout.addWidget(self.editor)
+        # 斜体按钮
+        italic_btn = QPushButton('𝐼 斜体')
+        italic_btn.setToolTip('Ctrl+I')
+        italic_btn.clicked.connect(lambda: self._insert_markdown('*', '*'))
+        toolbar.addWidget(italic_btn)
         
-        return widget
+        # 标题按钮
+        h1_btn = QPushButton('H1')
+        h1_btn.clicked.connect(lambda: self._insert_markdown('# ', ''))
+        toolbar.addWidget(h1_btn)
+        
+        h2_btn = QPushButton('H2')
+        h2_btn.clicked.connect(lambda: self._insert_markdown('## ', ''))
+        toolbar.addWidget(h2_btn)
+        
+        h3_btn = QPushButton('H3')
+        h3_btn.clicked.connect(lambda: self._insert_markdown('### ', ''))
+        toolbar.addWidget(h3_btn)
+        
+        toolbar.addSeparator()
+        
+        # 代码块按钮
+        code_btn = QPushButton('❖ 代码')
+        code_btn.clicked.connect(lambda: self._insert_markdown('```\n', '\n```'))
+        toolbar.addWidget(code_btn)
+        
+        # 引用按钮
+        quote_btn = QPushButton('❝ 引用')
+        quote_btn.clicked.connect(lambda: self._insert_markdown('> ', ''))
+        toolbar.addWidget(quote_btn)
+        
+        # 列表按钮
+        ul_btn = QPushButton('☰ 列表')
+        ul_btn.clicked.connect(lambda: self._insert_markdown('- ', ''))
+        toolbar.addWidget(ul_btn)
+        
+        toolbar.addSeparator()
+        
+        # 链接按钮
+        link_btn = QPushButton('🔗 链接')
+        link_btn.clicked.connect(lambda: self._insert_markdown('[', '](url)'))
+        toolbar.addWidget(link_btn)
+        
+        # 图片按钮
+        img_btn = QPushButton('🖼 图片')
+        img_btn.clicked.connect(lambda: self._insert_markdown('![', '](image.png)'))
+        toolbar.addWidget(img_btn)
+        
+        toolbar.addSeparator()
+        
+        # 分隔线按钮
+        hr_btn = QPushButton('— 分隔线')
+        hr_btn.clicked.connect(lambda: self._insert_markdown('\n---\n', ''))
+        toolbar.addWidget(hr_btn)
+        
+        layout.addWidget(toolbar)
+        
+        # ============================================
+        # 编辑和预览分割区
+        # ============================================
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # 左侧编辑器
+        editor_container = QWidget()
+        editor_layout = QVBoxLayout(editor_container)
+        editor_layout.setContentsMargins(10, 10, 5, 10)
+        
+        editor_label = QLabel('📝 Markdown 编辑')
+        editor_label.setFont(QFont('Microsoft YaHei', 11, QFont.Weight.Bold))
+        editor_layout.addWidget(editor_label)
+        
+        self.code_editor = QPlainTextEdit()
+        self.code_editor.setFont(QFont('Consolas', 12))
+        self.code_editor.setPlaceholderText('在这里开始写日记...\n\n支持 Markdown 语法')
+        self.code_editor.textChanged.connect(self._on_content_changed)
+        editor_layout.addWidget(self.code_editor)
+        
+        splitter.addWidget(editor_container)
+        
+        # 右侧预览
+        preview_container = QWidget()
+        preview_layout = QVBoxLayout(preview_container)
+        preview_layout.setContentsMargins(5, 10, 10, 10)
+        
+        preview_label = QLabel('👁 实时预览')
+        preview_label.setFont(QFont('Microsoft YaHei', 11, QFont.Weight.Bold))
+        preview_layout.addWidget(preview_label)
+        
+        self.preview = QTextEdit()
+        self.preview.setReadOnly(True)
+        self.preview.setFont(QFont('Microsoft YaHei', 11))
+        preview_layout.addWidget(self.preview)
+        
+        splitter.addWidget(preview_container)
+        
+        # 设置分割比例
+        splitter.setSizes([600, 600])
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
+        
+        layout.addWidget(splitter, 1)
+        
+        # 底部状态栏
+        status_layout = QHBoxLayout()
+        status_layout.setContentsMargins(10, 5, 10, 5)
+        
+        self.date_label = QLabel()
+        self.date_label.setFont(QFont('Microsoft YaHei', 10))
+        status_layout.addWidget(self.date_label)
+        
+        status_layout.addStretch()
+        
+        self.char_count_label = QLabel('0 字符')
+        self.char_count_label.setFont(QFont('Microsoft YaHei', 10))
+        status_layout.addWidget(self.char_count_label)
+        
+        layout.addLayout(status_layout)
+        
+        return page
     
-    def _create_status_bar(self):
+    def _create_calendar_page(self) -> QWidget:
         """
-        创建状态栏
+        创建日历页面
         
-        显示当前日期、字符数等信息
+        包含热力图日历，点击日期切换到该日日记
+        
+        Returns:
+            QWidget: 日历页面
         """
-        self.statusbar = QStatusBar()
-        self.setStatusBar(self.statusbar)
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
         
-        # 状态标签
-        self.status_label = self.statusbar.showMessage('就绪')
+        # 标题
+        title = QLabel('📅 日记日历')
+        title.setFont(QFont('Microsoft YaHei', 18, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
         
-        # 字符数标签
-        self.char_count_label = self.statusbar.showMessage('字符数: 0')
+        # 说明文字
+        hint = QLabel('点击日期查看或编辑当天的日记')
+        hint.setFont(QFont('Microsoft YaHei', 10))
+        hint.setStyleSheet('color: #666;')
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(hint)
+        
+        # 热力图日历
+        self.heatmap = HeatmapCalendar()
+        self.heatmap.date_selected.connect(self._on_date_selected_from_calendar)
+        layout.addWidget(self.heatmap, 1)
+        
+        # 刷新按钮
+        refresh_btn = QPushButton('🔄 刷新数据')
+        refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 6px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+        refresh_btn.clicked.connect(self._refresh_heatmap)
+        layout.addWidget(refresh_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        
+        return page
     
-    def _setup_auto_save(self):
+    def _create_settings_page(self) -> QWidget:
         """
-        设置自动保存
+        创建设置页面
         
-        根据配置定期自动保存日记
+        Returns:
+            QWidget: 设置页面
         """
-        # 创建定时器
-        self.auto_save_timer = QTimer(self)
-        self.auto_save_timer.timeout.connect(self._auto_save)
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
         
-        # 获取自动保存间隔（秒）
-        interval = self.config.get('auto_save_interval', 30)
+        # 标题
+        title = QLabel('⚙️ 设置')
+        title.setFont(QFont('Microsoft YaHei', 18, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
         
-        # 如果间隔大于0，启动定时器
-        if interval > 0:
-            self.auto_save_timer.start(interval * 1000)  # 转换为毫秒
+        # 设置内容容器
+        settings_container = QWidget()
+        settings_container.setStyleSheet("""
+            QWidget {
+                background-color: white;
+                border-radius: 10px;
+            }
+        """)
+        settings_layout = QVBoxLayout(settings_container)
+        settings_layout.setSpacing(20)
+        
+        # 存储路径设置
+        path_group = self._create_setting_group('存储设置')
+        path_layout = QHBoxLayout()
+        
+        path_label = QLabel('日记存储路径:')
+        path_label.setFont(QFont('Microsoft YaHei', 11))
+        path_layout.addWidget(path_label)
+        
+        self.path_display = QLabel()
+        self.path_display.setFont(QFont('Consolas', 10))
+        self.path_display.setStyleSheet('color: #666; padding: 5px; background: #f5f5f5; border-radius: 4px;')
+        path_layout.addWidget(self.path_display, 1)
+        
+        change_path_btn = QPushButton('更改')
+        change_path_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
+        change_path_btn.clicked.connect(self._change_storage_path)
+        path_layout.addWidget(change_path_btn)
+        
+        path_group.layout().addLayout(path_layout)
+        settings_layout.addWidget(path_group)
+        
+        # 编辑器设置
+        editor_group = self._create_setting_group('编辑器设置')
+        editor_layout = QFormLayout()
+        
+        # 字体大小
+        font_layout = QHBoxLayout()
+        self.font_size_spin = QSpinBox()
+        self.font_size_spin.setRange(8, 24)
+        self.font_size_spin.setValue(self.config.get('editor_font_size', 12))
+        self.font_size_spin.valueChanged.connect(self._on_font_size_changed)
+        font_layout.addWidget(self.font_size_spin)
+        font_layout.addStretch()
+        editor_layout.addRow('编辑器字体大小:', font_layout)
+        
+        # 自动保存
+        auto_save_layout = QHBoxLayout()
+        self.auto_save_spin = QSpinBox()
+        self.auto_save_spin.setRange(0, 300)
+        self.auto_save_spin.setValue(self.config.get('auto_save_interval', 30))
+        self.auto_save_spin.setSuffix(' 秒')
+        self.auto_save_spin.setSpecialValueText('禁用')
+        auto_save_layout.addWidget(self.auto_save_spin)
+        auto_save_layout.addStretch()
+        editor_layout.addRow('自动保存间隔:', auto_save_layout)
+        
+        editor_group.layout().addLayout(editor_layout)
+        settings_layout.addWidget(editor_group)
+        
+        # 关于信息
+        about_group = self._create_setting_group('关于')
+        about_layout = QVBoxLayout()
+        
+        app_name = QLabel('鸽子日记 GeziDiary')
+        app_name.setFont(QFont('Microsoft YaHei', 14, QFont.Weight.Bold))
+        about_layout.addWidget(app_name)
+        
+        version = QLabel('版本: 1.0.0')
+        version.setStyleSheet('color: #666;')
+        about_layout.addWidget(version)
+        
+        desc = QLabel('一款简洁优雅的Markdown日记应用')
+        desc.setStyleSheet('color: #666;')
+        desc.setWordWrap(True)
+        about_layout.addWidget(desc)
+        
+        about_group.layout().addLayout(about_layout)
+        settings_layout.addWidget(about_group)
+        
+        settings_layout.addStretch()
+        settings_layout.addWidget(self._create_save_settings_button())
+        
+        layout.addWidget(settings_container, 1)
+        
+        return page
+    
+    def _create_setting_group(self, title: str) -> QFrame:
+        """
+        创建设置分组框
+        
+        Args:
+            title: 分组标题
+        
+        Returns:
+            QFrame: 分组框
+        """
+        group = QFrame()
+        group.setStyleSheet("""
+            QFrame {
+                background-color: #fafafa;
+                border: 1px solid #e0e0e0;
+                border-radius: 8px;
+                padding: 15px;
+            }
+        """)
+        layout = QVBoxLayout(group)
+        layout.setSpacing(10)
+        
+        title_label = QLabel(title)
+        title_label.setFont(QFont('Microsoft YaHei', 12, QFont.Weight.Bold))
+        layout.addWidget(title_label)
+        
+        return group
+    
+    def _create_save_settings_button(self) -> QPushButton:
+        """
+        创建保存设置按钮
+        
+        Returns:
+            QPushButton: 保存按钮
+        """
+        btn = QPushButton('💾 保存设置')
+        btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 12px 30px;
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
+        btn.clicked.connect(self._save_settings)
+        return btn
+    
+    def _create_bottom_navigation(self):
+        """
+        创建底部导航栏
+        """
+        # 创建底部导航容器
+        nav_container = QWidget()
+        nav_container.setFixedHeight(60)
+        nav_container.setStyleSheet("""
+            QWidget {
+                background-color: #ffffff;
+                border-top: 1px solid #e0e0e0;
+            }
+        """)
+        
+        nav_layout = QHBoxLayout(nav_container)
+        nav_layout.setContentsMargins(20, 5, 20, 5)
+        nav_layout.setSpacing(20)
+        
+        # 编辑按钮
+        self.edit_btn = self._create_nav_button('📝', '编辑', 0)
+        nav_layout.addWidget(self.edit_btn)
+        
+        # 日历按钮
+        self.calendar_btn = self._create_nav_button('📅', '日历', 1)
+        nav_layout.addWidget(self.calendar_btn)
+        
+        nav_layout.addStretch()
+        
+        # 设置按钮
+        self.settings_btn = self._create_nav_button('⚙️', '设置', 2)
+        nav_layout.addWidget(self.settings_btn)
+        
+        # 将导航栏添加到主窗口
+        self.setMenuWidget(nav_container)
+        
+        # 默认选中编辑页面
+        self._switch_page(0)
+    
+    def _create_nav_button(self, icon: str, text: str, page_index: int) -> QPushButton:
+        """
+        创建导航按钮
+        
+        Args:
+            icon: 图标
+            text: 文字
+            page_index: 页面索引
+        
+        Returns:
+            QPushButton: 导航按钮
+        """
+        btn = QPushButton(f'{icon} {text}')
+        btn.setCheckable(True)
+        btn.setFixedHeight(45)
+        btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: 2px solid transparent;
+                border-radius: 8px;
+                padding: 5px 20px;
+                font-size: 14px;
+                font-weight: bold;
+                color: #666;
+            }
+            QPushButton:hover {
+                background-color: #f0f0f0;
+                color: #333;
+            }
+            QPushButton:checked {
+                background-color: #2196F3;
+                color: white;
+                border-color: #1976D2;
+            }
+        """)
+        btn.clicked.connect(lambda: self._switch_page(page_index))
+        return btn
+    
+    def _switch_page(self, index: int):
+        """
+        切换页面
+        
+        Args:
+            index: 页面索引
+        """
+        # 切换堆叠窗口
+        self.stacked_widget.setCurrentIndex(index)
+        
+        # 更新按钮状态
+        self.edit_btn.setChecked(index == 0)
+        self.calendar_btn.setChecked(index == 1)
+        self.settings_btn.setChecked(index == 2)
+        
+        # 特殊处理
+        if index == 1:  # 日历页面
+            self._refresh_heatmap()
+        elif index == 2:  # 设置页面
+            self._load_settings()
     
     # ============================================
-    # 数据加载和保存方法
+    # 编辑页面功能
+    # ============================================
+    
+    def _insert_markdown(self, prefix: str, suffix: str):
+        """
+        插入Markdown标记
+        
+        Args:
+            prefix: 前缀
+            suffix: 后缀
+        """
+        cursor = self.code_editor.textCursor()
+        selected_text = cursor.selectedText()
+        
+        if selected_text:
+            # 有选中文本，包裹选中文本
+            new_text = prefix + selected_text + suffix
+            cursor.insertText(new_text)
+        else:
+            # 无选中文本，插入标记并将光标移到中间
+            cursor.insertText(prefix + suffix)
+            # 移动光标到中间
+            pos = cursor.position() - len(suffix)
+            cursor.setPosition(pos)
+            self.code_editor.setTextCursor(cursor)
+        
+        self.code_editor.setFocus()
+    
+    def _on_content_changed(self):
+        """
+        处理内容变化
+        """
+        # 更新预览
+        content = self.code_editor.toPlainText()
+        html = self.markdown_processor.to_html_with_style(content)
+        self.preview.setHtml(html)
+        
+        # 更新字符数
+        self.char_count_label.setText(f'{len(content)} 字符')
+    
+    # ============================================
+    # 日历页面功能
+    # ============================================
+    
+    def _refresh_heatmap(self):
+        """
+        刷新热力图数据
+        """
+        current_year = date.today().year
+        year_data = {}
+        
+        entries = self.diary_manager.get_entries_by_year(current_year)
+        for entry in entries:
+            year_data[entry.date] = entry.char_count
+        
+        self.heatmap.set_year_data(current_year, year_data)
+    
+    def _on_date_selected_from_calendar(self, selected_date: date):
+        """
+        处理从日历选择日期
+        
+        Args:
+            selected_date: 选中的日期
+        """
+        # 保存当前日记
+        self._save_current_entry()
+        
+        # 加载选中的日记
+        self.load_entry(selected_date)
+        
+        # 切换到编辑页面
+        self._switch_page(0)
+    
+    # ============================================
+    # 设置页面功能
+    # ============================================
+    
+    def _load_settings(self):
+        """
+        加载设置到UI
+        """
+        # 存储路径
+        self.path_display.setText(self.config.get_storage_path())
+        
+        # 字体大小
+        self.font_size_spin.setValue(self.config.get('editor_font_size', 12))
+        
+        # 自动保存
+        self.auto_save_spin.setValue(self.config.get('auto_save_interval', 30))
+    
+    def _change_storage_path(self):
+        """
+        更改存储路径
+        """
+        new_path = QFileDialog.getExistingDirectory(
+            self,
+            '选择日记存储路径',
+            self.config.get_storage_path()
+        )
+        
+        if new_path:
+            self.path_display.setText(new_path)
+    
+    def _on_font_size_changed(self, size: int):
+        """
+        处理字体大小变化
+        
+        Args:
+            size: 字体大小
+        """
+        font = self.code_editor.font()
+        font.setPointSize(size)
+        self.code_editor.setFont(font)
+    
+    def _save_settings(self):
+        """
+        保存设置
+        """
+        # 存储路径
+        new_path = self.path_display.text()
+        if new_path and new_path != self.config.get_storage_path():
+            self.config.set_storage_path(new_path)
+            self.diary_manager = DiaryManager(new_path)
+            self.load_entry(date.today())
+        
+        # 字体大小
+        self.config.set('editor_font_size', self.font_size_spin.value())
+        
+        # 自动保存
+        self.config.set('auto_save_interval', self.auto_save_spin.value())
+        
+        # 保存配置
+        self.config.save()
+        
+        QMessageBox.information(self, '保存成功', '设置已保存！')
+    
+    # ============================================
+    # 日记管理功能
     # ============================================
     
     def load_entry(self, entry_date: date):
@@ -355,295 +767,57 @@ class MainWindow(QMainWindow):
         Args:
             entry_date: 要加载的日期
         """
-        # 从管理器加载日记
+        # 保存当前日记
+        if self.current_entry:
+            self._save_current_entry()
+        
+        # 加载日记
         self.current_entry = self.diary_manager.load_entry(entry_date)
         
-        # 更新编辑器内容
-        self.editor.set_content(self.current_entry.content)
+        # 更新编辑器
+        self.code_editor.setPlainText(self.current_entry.content)
+        
+        # 更新日期标签
+        self.date_label.setText(self.current_entry.get_formatted_date())
         
         # 更新窗口标题
-        self._update_window_title()
-        
-        # 更新状态栏
-        self._update_status_bar()
-        
-        # 更新热力图选中状态
-        self.heatmap.set_selected_date(entry_date)
-        
-        # 更新日记列表选中状态
-        self.diary_list.set_selected_date(entry_date)
+        self.setWindowTitle(f'鸽子日记 - {self.current_entry.get_formatted_date()}')
     
-    def save_current_entry(self) -> bool:
+    def _save_current_entry(self):
         """
         保存当前日记
-        
-        Returns:
-            bool: 保存成功返回True
         """
         if not self.current_entry:
-            return False
+            return
         
-        # 获取编辑器内容
-        content = self.editor.get_content()
-        
-        # 更新日记内容
+        # 获取内容
+        content = self.code_editor.toPlainText()
         self.current_entry.update_content(content)
         
-        # 保存到文件
-        success = self.diary_manager.save_entry(self.current_entry)
-        
-        if success:
-            # 发射保存信号
-            self.entry_saved.emit(self.current_entry.date)
-            
-            # 更新UI
-            self._update_window_title()
-            self._update_status_bar()
-            
-            # 更新热力图数据
-            self._refresh_heatmap()
-            
-            # 更新日记列表
-            self._refresh_diary_list()
-            
-            # 更新统计
-            self._update_stats()
-            
-            # 显示保存成功提示
-            self.statusbar.showMessage('已保存', 2000)
-        
-        return success
-    
-    def _auto_save(self):
-        """
-        自动保存当前日记
-        
-        仅在内容有变化时保存
-        """
-        if self.current_entry and self.editor.is_modified():
-            self.save_current_entry()
+        # 保存
+        if not self.current_entry.is_empty():
+            self.diary_manager.save_entry(self.current_entry)
     
     # ============================================
-    # UI更新方法
-    # ============================================
-    
-    def _update_window_title(self):
-        """
-        更新窗口标题
-        
-        显示当前日期和修改状态
-        """
-        if self.current_entry:
-            date_str = self.current_entry.get_formatted_date()
-            modified = '*' if self.editor.is_modified() else ''
-            self.setWindowTitle(f'{modified}鸽子日记 - {date_str}')
-    
-    def _update_status_bar(self):
-        """
-        更新状态栏信息
-        """
-        if self.current_entry:
-            # 更新字符数
-            char_count = len(self.editor.get_content())
-            self.statusbar.showMessage(f'字符数: {char_count}')
-    
-    def _refresh_heatmap(self):
-        """
-        刷新热力图数据
-        """
-        # 获取当前年份的所有日记数据
-        current_year = date.today().year
-        year_data = {}
-        
-        # 获取该年份的所有日记
-        entries = self.diary_manager.get_entries_by_year(current_year)
-        
-        for entry in entries:
-            # 使用字符数作为热力值
-            year_data[entry.date] = entry.char_count
-        
-        # 更新热力图
-        self.heatmap.set_year_data(current_year, year_data)
-    
-    def _refresh_diary_list(self):
-        """
-        刷新日记列表
-        """
-        # 获取当前月份的所有日记
-        today = date.today()
-        entries = self.diary_manager.get_entries_by_month(today.year, today.month)
-        
-        # 更新列表（只显示非空日记）
-        non_empty_entries = [e for e in entries if not e.is_empty()]
-        self.diary_list.set_entries(non_empty_entries)
-    
-    def _update_stats(self):
-        """
-        更新统计信息
-        """
-        stats = self.diary_manager.get_stats()
-        self.stats_widget.update_stats(stats)
-    
-    # ============================================
-    # 事件处理槽函数
-    # ============================================
-    
-    def _on_date_selected_from_heatmap(self, selected_date: date):
-        """
-        处理从热力图选择日期
-        
-        Args:
-            selected_date: 选中的日期
-        """
-        # 先保存当前日记
-        if self.editor.is_modified():
-            self.save_current_entry()
-        
-        # 加载选中的日记
-        self.load_entry(selected_date)
-    
-    def _on_entry_selected_from_list(self, entry_date: date):
-        """
-        处理从列表选择日记
-        
-        Args:
-            entry_date: 选中的日记日期
-        """
-        # 先保存当前日记
-        if self.editor.is_modified():
-            self.save_current_entry()
-        
-        # 加载选中的日记
-        self.load_entry(entry_date)
-    
-    def _on_content_changed(self):
-        """
-        处理编辑器内容变化
-        """
-        # 更新窗口标题（显示修改标记）
-        self._update_window_title()
-        
-        # 更新状态栏
-        self._update_status_bar()
-    
-    def _on_new_entry(self):
-        """
-        处理新建日记
-        """
-        # 保存当前日记
-        if self.editor.is_modified():
-            self.save_current_entry()
-        
-        # 加载今天的日记
-        self.load_entry(date.today())
-    
-    def _on_save(self):
-        """
-        处理保存操作
-        """
-        self.save_current_entry()
-    
-    def _on_undo(self):
-        """
-        处理撤销操作
-        """
-        self.editor.undo()
-    
-    def _on_redo(self):
-        """
-        处理重做操作
-        """
-        self.editor.redo()
-    
-    def _on_find(self):
-        """
-        处理查找操作
-        """
-        self.editor.show_find_dialog()
-    
-    def _on_toggle_preview(self, checked: bool):
-        """
-        处理预览显示切换
-        
-        Args:
-            checked: 是否显示预览
-        """
-        self.editor.set_preview_visible(checked)
-    
-    def _on_settings(self):
-        """
-        处理设置操作
-        """
-        # 创建设置对话框
-        dialog = SettingsDialog(self.config, self)
-        
-        # 显示对话框
-        if dialog.exec() == SettingsDialog.DialogCode.Accepted:
-            # 应用新设置
-            self._apply_settings()
-    
-    def _apply_settings(self):
-        """
-        应用设置更改
-        """
-        # 更新存储路径
-        new_path = self.config.get_storage_path()
-        if new_path != self.diary_manager.storage_path:
-            self.diary_manager = DiaryManager(new_path)
-            self.load_entry(date.today())
-        
-        # 更新自动保存间隔
-        interval = self.config.get('auto_save_interval', 30)
-        if interval > 0:
-            self.auto_save_timer.start(interval * 1000)
-        else:
-            self.auto_save_timer.stop()
-        
-        # 刷新UI
-        self._refresh_heatmap()
-        self._refresh_diary_list()
-    
-    # ============================================
-    # 窗口事件重写
+    # 窗口事件
     # ============================================
     
     def closeEvent(self, event):
         """
         处理窗口关闭事件
-        
-        Args:
-            event: 关闭事件
         """
         # 保存当前日记
-        if self.editor.is_modified():
-            self.save_current_entry()
+        self._save_current_entry()
         
-        # 保存窗口位置和尺寸
+        # 保存窗口设置
         self.config.set('window_width', self.width())
         self.config.set('window_height', self.height())
         self.config.set('window_x', self.x())
         self.config.set('window_y', self.y())
-        
-        # 保存侧边栏宽度
-        sizes = self.main_splitter.sizes()
-        if len(sizes) >= 2:
-            self.config.set('sidebar_width', sizes[0])
-        
-        # 保存配置
         self.config.save()
         
-        # 接受关闭事件
         event.accept()
-    
-    def showEvent(self, event):
-        """
-        处理窗口显示事件
-        
-        Args:
-            event: 显示事件
-        """
-        super().showEvent(event)
-        
-        # 窗口显示后刷新数据
-        self._refresh_heatmap()
-        self._refresh_diary_list()
+
+
+# 导入缺失的模块
+from PyQt6.QtWidgets import QFormLayout, QSpinBox
